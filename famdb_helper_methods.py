@@ -1,5 +1,8 @@
+import ast
+import gzip
 import re
 import h5py
+import numpy
 from famdb_globals import (
     SOUNDEX_LOOKUP,
     GROUP_FAMILIES,
@@ -38,17 +41,63 @@ def get_family(entry):
     # Read the family attributes and data
     for k in entry.attrs:
         value = entry.attrs[k]
+        if k == "model":
+            # Normalise whatever storage format was used for the model so that
+            # callers always receive a plain decoded string.
+            #
+            # Historical storage variants (all produced by intermediate export
+            # code before the current sibling-dataset format was stabilised):
+            #
+            #   (a) Raw gzip bytes stored as HDF5 bytes attribute.
+            #       h5py returns bytes / numpy.bytes_.
+            #
+            #   (b) Python repr of gzip bytes stored as a string attribute,
+            #       e.g. the literal text "b'\x1f\x8b...'" — produced when
+            #       str(compressed_bytes) was accidentally called before
+            #       storing.  h5py returns a str starting with "b'".
+            if isinstance(value, (bytes, numpy.bytes_)):
+                value = gzip.decompress(bytes(value)).decode()
+            elif isinstance(value, str) and value.startswith("b'"):
+                try:
+                    raw = ast.literal_eval(value)   # str → bytes
+                    value = gzip.decompress(raw).decode()
+                except Exception:
+                    pass  # leave as-is; to_dfam_hmm will handle or skip
         setattr(family, k, value)
+
+    # Preferred storage (current format): gzip-compressed sibling dataset.
+    # This overrides anything that may have been read from attrs above.
+    model_key = entry.name.split("/")[-1] + ".model"
+    if model_key in entry.parent:
+        compressed = entry.parent[model_key][()].tobytes()
+        decoded = gzip.decompress(compressed).decode()
+        # Handle the case where str(gzip_bytes) was accidentally stored instead
+        # of the raw bytes, producing gzip(repr(gzip(HMMER3))).  One layer of
+        # gzip is already stripped above; if the result looks like a bytes repr
+        # we use ast.literal_eval to recover the actual bytes and decompress once
+        # more to reach the original HMMER3 text.
+        if decoded.startswith("b'") or decoded.startswith('b"'):
+            try:
+                inner = ast.literal_eval(decoded)  # repr-string → bytes
+                decoded = gzip.decompress(inner).decode()
+            except Exception:
+                pass  # leave as-is; to_dfam_hmm will handle or skip
+        family.model = decoded
 
     return family
 
 
 def families_iterator(g, prefix=""):
-    """Generator that returns all items in a group"""
+    """Generator that returns all family accession keys in a group.
+
+    Skips the companion '.model' datasets that are stored alongside each
+    family dataset in the current file format.
+    """
     for key, item in g.items():
         path = f"{prefix}/{key}"
         if isinstance(item, h5py.Dataset):  # test for dataset
-            yield (key)
+            if not key.endswith(".model"):   # skip compressed-model companions
+                yield (key)
         elif isinstance(item, h5py.Group):  # test for group (go down)
             yield from families_iterator(item, path)
 
@@ -204,34 +253,3 @@ def is_fasta(infile):
                 fasta_el["header"] = None
                 fasta_el["body"] = None
     return fasta_el["header"] is None and fasta_el["body"] is None
-
-
-# def gen_min_map():
-#     return {
-#         "file_map": {
-#             "0": {
-#                 "T_root": 1,
-#                 "bytes": 0,
-#                 "nodes": [1],
-#                 "F_roots": [1],
-#                 "T_root_name": "root",
-#                 "F_roots_names": ["root"],
-#                 "filename": "min_init",
-#             }
-#         }
-#     }
-
-
-# def gen_min_data():
-#     dum_node = TaxNode(1, 1)
-#     dum_node.names.append("root")
-#     tax_db = {1: dum_node}
-#     partition_nodes = {0: [1]}
-#     min_map = gen_min_map()
-#     dum_fam = Family()
-#     dum_fam.name = "dummy"
-#     dum_fam.accession = "DUMMYAccession"
-#     dum_fam.clades = [0]
-#     dum_fam.consensus = "BLAHBLAHBLAH"
-#     dum_fam.model = "BLAHBLAHBLAH"
-#     return tax_db, partition_nodes, min_map, [dum_fam]

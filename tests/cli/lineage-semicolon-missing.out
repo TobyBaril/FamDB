@@ -1,5 +1,5 @@
-2(0): root;Order [1]
-4(1): root;Order;Genus [1]
-6(1): root;Order;Genus;Species [1]
-5(2): root;Order;Other Genus (Taxon in Partition 2, Partition File Not Found)
-7(2): root;Order;Other Genus;Other Species (Taxon in Partition 2, Partition File Not Found)
+2(cc:0,ch:1): root;Order [1]
+4(cc:0,ch:2): root;Order;Genus [1]
+6(uc:1): root;Order;Genus;Species [1]
+5(uc:1): root;Order;Other Genus [0]
+7(uc:1): root;Order;Other Genus;Other Species [1]

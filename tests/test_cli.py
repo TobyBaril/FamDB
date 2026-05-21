@@ -61,7 +61,13 @@ class TestCliOutput(unittest.TestCase):
         os.makedirs(file_dir, exist_ok=True)
         db_dir = f"{file_dir}/unittest"
         init_db_file(db_dir)
-        filenames = [f"{db_dir}.0.h5", f"{db_dir}.1.h5", f"{db_dir}.2.h5"]
+        filenames = [
+            f"{db_dir}.0.h5",
+            f"{db_dir}.curated.consensus.0.h5",
+            f"{db_dir}.curated.hmm.1.h5",
+            f"{db_dir}.curated.hmm.2.h5",
+            f"{db_dir}.uncurated.consensus.1.h5",
+        ]
         TestCliOutput.filenames = filenames
         TestCliOutput.file_dir = file_dir
         TestCliOutput.tests_dir = os.path.join(os.path.dirname(__file__), "cli")
@@ -122,7 +128,7 @@ class TestCliOutput(unittest.TestCase):
 
     def test_families_missing(self):
         test = "families-missing"
-        args = ["-e", "2", "families", "-d", "1"]
+        args = ["-e", "uc", "families", "-d", "1"]
         test_one(self, test, args)
 
     def test_families_summary(self):
@@ -162,7 +168,7 @@ class TestCliOutput(unittest.TestCase):
 
     def test_lineage_pretty_missing(self):
         test = "lineage-pretty-missing"
-        args = ["-e", "2", "lineage", "-d", "2"]
+        args = ["-e", "ch", "lineage", "-d", "2"]
         test_one(self, test, args)
 
     def test_lineage_semicolons(self):
@@ -172,7 +178,7 @@ class TestCliOutput(unittest.TestCase):
 
     def test_lineage_semicolons_missing(self):
         test = "lineage-semicolon-missing"
-        args = ["-e", "2", "lineage", "--format", "semicolon", "-d", "2"]
+        args = ["-e", "ch", "lineage", "--format", "semicolon", "-d", "2"]
         test_one(self, test, args)
 
     def test_lineage_totals(self):
@@ -182,7 +188,7 @@ class TestCliOutput(unittest.TestCase):
 
     def test_lineage_totals_missing(self):
         test = "lineage-totals-missing"
-        args = ["-e", "2", "lineage", "--format", "totals", "-d", "2"]
+        args = ["-e", "ch", "lineage", "--format", "totals", "-d", "2"]
         test_one(self, test, args)
 
     def test_lineage_curated(self):

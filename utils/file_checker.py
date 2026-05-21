@@ -59,23 +59,34 @@ from famdb_globals import (
     GROUP_NODES,
     GROUP_REPEATPEPS,
     GROUP_FILE_HISTORY,
+    DATA_PARTITION_CACHE,
+    DATA_NAMES_CACHE,
     META_DB_VERSION,
     META_DB_NAME,
     META_CREATED,
     META_FAMDB_VERSION,
+    FAMDB_COMPONENT_FILE_RE,
+    FAMDB_ROOT_FILE_RE,
 )
 
-# List of expected file groups in FamDb files.
-# True indicates that it should be in all files, False that it should only appear in a root file
-file_groups = {
-    GROUP_FAMILIES: True,
-    GROUP_LOOKUP_BYNAME: True,
-    GROUP_LOOKUP_BYTAXON: True,
-    GROUP_LOOKUP_BYSTAGE: True,
-    GROUP_NODES: False,
-    GROUP_REPEATPEPS: False,
-    GROUP_FILE_HISTORY: True,
-}
+# Expected groups/datasets per file type in v3 FamDB.
+# "root" entries must be present in root files.
+# "component" entries must be present in component (leaf) files.
+ROOT_REQUIRED = [
+    GROUP_NODES,
+    GROUP_REPEATPEPS,
+    GROUP_LOOKUP_BYTAXON,
+    DATA_PARTITION_CACHE,
+    DATA_NAMES_CACHE,
+    GROUP_FILE_HISTORY,
+]
+
+COMPONENT_REQUIRED = [
+    GROUP_FAMILIES,
+    GROUP_LOOKUP_BYNAME,
+    GROUP_LOOKUP_BYSTAGE,
+    GROUP_FILE_HISTORY,
+]
 
 
 def attempt(func):
@@ -91,54 +102,47 @@ def attempt(func):
 
 @attempt
 def file_is_root(path):
-    if "." not in path or "h5" not in path:
-        raise Exception("File does not appear to be a partitioned FamDB H5 file")
-    splits = path.split(".")
-    return int(splits[-2]) == 0
+    filename = os.path.basename(path)
+    if FAMDB_COMPONENT_FILE_RE.match(filename):
+        return False
+    if FAMDB_ROOT_FILE_RE.match(filename):
+        return True
+    raise Exception(
+        f"File '{filename}' does not match a recognized FamDB v3 filename pattern.\n"
+        "Expected '<base>.0.h5' (root) or '<base>.(curated|uncurated).(consensus|hmm).<N>.h5' (component)."
+    )
 
 
 @attempt
 def get_group(file, group):
     thing = file.get(group)
-    if thing:
-        has_keys = callable(getattr(thing, "keys", False))
-        if has_keys:
-            keys = thing.keys()
-            if group == GROUP_FAMILIES:
-                return set(keys) <= {
-                    "Aux",
-                    "DF",
-                    "DR",
-                }  # all families should be sorted into one of these three bins
-            if group == GROUP_LOOKUP_BYNAME:
-                return (
-                    len(keys) > 0
-                )  # names vary, just testing that there is more than one element
-            if group == GROUP_LOOKUP_BYSTAGE:
-                return len(keys) > 0
-            if group == GROUP_LOOKUP_BYTAXON:
-                return len(keys) > 0
-            if group == GROUP_NODES:
-                return all(
-                    x.isdigit() for x in set(keys)
-                )  # test that all elements are numbers
-            if group == GROUP_NODES:
-                return all(
-                    x.isdigit() for x in set(keys)
-                )  # test that all elements are numbers
-            if group == GROUP_FILE_HISTORY:
-                for elem in keys:
-                    try:
-                        datetime.datetime.strptime(
-                            elem, "%Y-%m-%d %H:%M:%S.%f"
-                        )  # test that all elements are datetimes
-                    except ValueError:
-                        return False
-                return True
-        else:
-            if group == GROUP_REPEATPEPS:
-                return True  # if this exists, it's just a dataset
-
+    if thing is None:
+        return False
+    has_keys = callable(getattr(thing, "keys", None))
+    if has_keys:
+        keys = list(thing.keys())
+        if group == GROUP_FAMILIES:
+            # All families are sorted into DF, DR, or Aux bins
+            return set(keys) <= {"Aux", "DF", "DR"}
+        if group == GROUP_LOOKUP_BYNAME:
+            return len(keys) > 0
+        if group == GROUP_LOOKUP_BYSTAGE:
+            return len(keys) > 0
+        if group == GROUP_LOOKUP_BYTAXON:
+            return len(keys) > 0
+        if group == GROUP_NODES:
+            return all(x.isdigit() for x in keys)
+        if group == GROUP_FILE_HISTORY:
+            for elem in keys:
+                try:
+                    datetime.datetime.strptime(elem, "%Y-%m-%d %H:%M:%S.%f")
+                except ValueError:
+                    return False
+            return True
+    else:
+        # Dataset (not a group)
+        if group in (GROUP_REPEATPEPS, DATA_PARTITION_CACHE, DATA_NAMES_CACHE):
+            return True
     return False
 
 
@@ -180,14 +184,25 @@ def main():
         with h5py.File(args.input, "r") as file:
             get_attrs(file)
             all_expected_groups = True
-            for group in file_groups:
-                if (
-                    is_root_file or file_groups[group]
-                ):  # check all groups for root files, but only selected ones for leaf files
-                    print(f"  Testing Group: {group}")
-                    if not get_group(file, group):
-                        print(f"\t {group} Not found, or not as expected")
-                        all_expected_groups = False
+            required = ROOT_REQUIRED if is_root_file else COMPONENT_REQUIRED
+            for group in required:
+                print(f"  Testing: {group}")
+                if not get_group(file, group):
+                    print(f"\t {group} Not found, or not as expected")
+                    all_expected_groups = False
+            # Component files must have a component_type attribute
+            if not is_root_file:
+                ct = file.attrs.get("component_type")
+                if ct:
+                    print(f"  component_type: {ct.decode() if isinstance(ct, bytes) else ct}")
+                else:
+                    print("\t component_type attribute missing from component file")
+                    all_expected_groups = False
+            # Root files must NOT have GROUP_LOOKUP_BYTAXON directly under a component key
+            # (just check that GROUP_LOOKUP_BYTAXON is absent from component files)
+            if not is_root_file and file.get(GROUP_LOOKUP_BYTAXON):
+                print(f"\t {GROUP_LOOKUP_BYTAXON} should not be present in component files")
+                all_expected_groups = False
             if all_expected_groups:
                 print("  All Expected Groups Found")
 

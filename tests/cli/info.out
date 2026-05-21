@@ -1,6 +1,6 @@
 
 FamDB Directory               : /tmp/famdb_test/cli
-FamDB Creation Format Version : 2.0.5
+FamDB Creation Format Version : 3.0.0
 FamDB Creation Date           : <creation date>
 
 Database : Test Dfam
@@ -9,19 +9,16 @@ Date     : 2020-07-15
 
 Dfam - A database of transposable element (TE) sequence alignments and HMMs.
 
-3 Partitions Present
+5 Partitions Present
 Total consensus sequences present: 5
 Total HMMs present               : 3
 
 
-Partition Details
------------------
- Partition 0 [unittest.0.h5]: Root Node 
-     Consensi: 2, HMMs: 3
-
- Partition 1 [unittest.1.h5]: Search Node 
-     Consensi: 2, HMMs: 0
-
- Partition 2 [unittest.2.h5]: Other Node - Other Node
-     Consensi: 1, HMMs: 0
+Installed Components
+--------------------
+ Curated Consensus partition 0 [unittest.curated.consensus.0.h5]: Consensi: 3, HMMs: 0
+ Curated HMM partition 1 [unittest.curated.hmm.1.h5]: Consensi: 0, HMMs: 3
+ Curated HMM partition 2 [unittest.curated.hmm.2.h5]: Consensi: 0, HMMs: 0
+ Uncurated Consensus partition 1 [unittest.uncurated.consensus.1.h5]: Consensi: 2, HMMs: 0
+ Uncurated HMM: [ Not Installed ]
 

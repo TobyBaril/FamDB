@@ -1,7 +1,6 @@
 import logging
+import os
 import re
-
-LOGGER = logging.getLogger(__name__)
 
 GROUP_FAMILIES = "Families"
 GROUP_LOOKUP_BYNAME = "Lookup/ByName"
@@ -17,8 +16,31 @@ DATA_PARENT = "Parent"
 DATA_VAL_CHILDREN = "Val_Children"
 DATA_VAL_PARENT = "Val_Parent"
 DATA_TAXANAMES = "TaxaNames"
-DATA_PARTITION = "Partition"
 DATA_NAMES_CACHE = "NamesCache"
+DATA_PARTITION_CACHE = "PartitionCache"
+
+# Component type identifiers (curated/uncurated x consensus/hmm)
+COMPONENT_CC = "cc"   # curated consensus
+COMPONENT_CH = "ch"   # curated hmm
+COMPONENT_UC = "uc"   # uncurated consensus
+COMPONENT_UH = "uh"   # uncurated hmm
+COMPONENT_TYPES = [COMPONENT_CC, COMPONENT_CH, COMPONENT_UC, COMPONENT_UH]
+
+# Maps component type -> (is_curated, is_hmm)
+COMPONENT_META = {
+    COMPONENT_CC: (True,  False),
+    COMPONENT_CH: (True,  True),
+    COMPONENT_UC: (False, False),
+    COMPONENT_UH: (False, True),
+}
+
+# Filename patterns for v3 format
+# Root file:      <base>.0.h5
+# Component file: <base>.<curated|uncurated>.<consensus|hmm>.<N>.h5
+FAMDB_ROOT_FILE_RE = re.compile(r"^(.+)\.0\.h5$")
+FAMDB_COMPONENT_FILE_RE = re.compile(
+    r"^(.+)\.(curated|uncurated)\.(consensus|hmm)\.(\d+)\.h5$"
+)
 
 # key variables used in partition and export
 META_DB_VERSION = "db_version"
@@ -37,7 +59,7 @@ META_FILE_INFO = "file_info"
 dfam_acc_pat = re.compile("^(D[FR])([0-9]{2})([0-9]{2})([0-9]{2})[0-9]{3,6}$")
 
 # The current version of the file format
-FAMDB_VERSION = "2.0.5"
+FAMDB_VERSION = "3.0.0"
 
 DESCRIPTION = (
     "Dfam - A database of transposable element (TE) sequence alignments and HMMs."
@@ -163,4 +185,4 @@ SOUNDEX_LOOKUP = {
     "W": None,
 }
 
-TEST_DIR = "/tmp/famdb_test"
+TEST_DIR = os.environ.get("TMPDIR", "/tmp") + "/famdb_test"

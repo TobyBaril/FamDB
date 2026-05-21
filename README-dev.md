@@ -49,7 +49,7 @@ An additional file that is used by RepeatMasker and RepeatModeler.
 
 ## Creating famdb files
 
-Before exporting to FamDB be sure that there is a valid partition file by running `~/Server/dfam_partition.py`.
+Before exporting to FamDB be sure that there is a valid partition file by running `~/Server/partition_dfam.py`.
 
 `export_dfam.py` is used to build famdb files for Dfam releases. It
 can be used in a few ways:
@@ -89,6 +89,27 @@ The behavior of some tests can be controlled with these environment variables:
   `coverage run`, so they can be included in coverage.
 * `FAMDB_TEST_BLESS`: If non-empty, "blesses" the current actual output of CLI
   tests as the expected/desired output.
+
+The CLI tests (`tests/test_cli.py`) create temporary HDF5 files under the system
+temp directory and embed the resulting path in the `info` command's expected output.
+When blessing CLI tests, do **not** set `TMPDIR` to a non-standard path (e.g.
+`/tmp/claude`), otherwise the blessed `info.out` will contain the wrong directory
+and the test will fail on subsequent runs:
+
+```
+# Correct — bless without overriding TMPDIR
+$ FAMDB_TEST_BLESS=1 python3 -m unittest tests.test_cli
+
+# Wrong — embeds /tmp/claude into info.out
+$ FAMDB_TEST_BLESS=1 TMPDIR=/tmp/claude python3 -m unittest tests.test_cli
+```
+
+If you accidentally bless with a custom `TMPDIR`, re-bless the `info` test alone
+without the override:
+
+```
+$ FAMDB_TEST_BLESS=1 python3 -m unittest tests.test_cli.TestCliOutput.test_info
+```
 
 The `Makefile` also has a `coverage` target, which runs coverage in a way
 that works with all unit tests and places output in the `htmlcov/` directory.

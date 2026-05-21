@@ -75,10 +75,12 @@ class TestExports(unittest.TestCase):
             famdb = FamDB(self.file_dir, "r")
 
     def test_multiple_exports(self):
+        # In v3, component files from a different prefix are silently ignored
+        # (they don't match the root's prefix and are skipped by the scanner).
         init_single_file(0, self.db_dir)
         init_single_file(1, f"{self.db_dir}-bad")
-        with self.assertRaises(SystemExit):
-            famdb = FamDB(self.file_dir, "r")
+        famdb = FamDB(self.file_dir, "r")
+        self.assertIsNotNone(famdb)
 
     def test_different_ids(self):
         init_single_file(0, self.db_dir)

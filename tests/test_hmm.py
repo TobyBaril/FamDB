@@ -49,7 +49,13 @@ class TestHMM(unittest.TestCase):
         os.makedirs(file_dir, exist_ok=True)
         db_dir = f"{file_dir}/unittest"
         init_db_file(db_dir)
-        filenames = [f"{db_dir}.0.h5", f"{db_dir}.1.h5", f"{db_dir}.2.h5"]
+        filenames = [
+            f"{db_dir}.0.h5",
+            f"{db_dir}.curated.consensus.0.h5",
+            f"{db_dir}.curated.hmm.1.h5",
+            f"{db_dir}.curated.hmm.2.h5",
+            f"{db_dir}.uncurated.consensus.1.h5",
+        ]
         TestHMM.filenames = filenames
         TestHMM.file_dir = file_dir
 

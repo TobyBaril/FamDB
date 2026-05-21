@@ -1,7 +1,7 @@
 Exact Matches
 =============
-Taxon: 4, Partition: 1, Names: Genus (scientific name), Leaf Dummy 4 (common name)
+Taxon: 4, Partition: cc:0,ch:2, Names: Genus (scientific name), Leaf Dummy 4 (common name)
 
 Non-exact Matches
 =================
-Taxon: 5, Partition: 2, Names: Other Genus (scientific name), Leaf Dummy 5 (common name)
+Taxon: 5, Partition: uc:1, Names: Other Genus (scientific name), Leaf Dummy 5 (common name)
