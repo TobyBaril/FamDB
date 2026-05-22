@@ -216,6 +216,11 @@ class TestCliOutput(unittest.TestCase):
         args = ["names", "--format", "json", "genus"]
         test_one(self, test, args)
 
+    def test_check(self):
+        test = "check"
+        args = ["check", "4"]
+        test_one(self, test, args)
+
     def test_info(self):
         test = "info"
         args = ["info"]

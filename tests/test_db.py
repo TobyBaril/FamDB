@@ -382,11 +382,15 @@ class TestDatabase(unittest.TestCase):
         famdb.show_files()
         out = (
             "\nInstalled Components\n--------------------\n"
-            " Curated Consensus partition 0 [unittest.curated.consensus.0.h5]: Consensi: 3, HMMs: 0\n"
-            " Curated HMM partition 1 [unittest.curated.hmm.1.h5]: Consensi: 0, HMMs: 3\n"
-            " Curated HMM partition 2 [unittest.curated.hmm.2.h5]: Consensi: 0, HMMs: 0\n"
-            " Uncurated Consensus partition 1 [unittest.uncurated.consensus.1.h5]: Consensi: 2, HMMs: 0\n"
-            " Uncurated HMM: [ Not Installed ]\n"
+            "\n Curated Consensus:\n"
+            "     partition 0 [unittest.curated.consensus.0.h5]:  Root Node  3 families\n"
+            "\n Curated HMMs:\n"
+            "     partition 1 [unittest.curated.hmm.1.h5]:  Root Node   3 families\n"
+            "     partition 2 [unittest.curated.hmm.2.h5]:  Genus Node  0 families\n"
+            "\n Uncurated Consensus:\n"
+            "     partition 1 [unittest.uncurated.consensus.1.h5]:  Other Genus  2 families\n"
+            "\n Uncurated HMMs:\n"
+            "     [ Not Installed ]\n"
             "\n"
         )
         self.assertEqual(mock_print.getvalue(), out)

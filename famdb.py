@@ -54,9 +54,14 @@ LOGGER = logging.getLogger(__name__)
 from famdb_globals import (
     FILE_DESCRIPTION,
     FAMILY_FORMATS_EPILOG,
+    SINGLE_FAMILY_FORMATS_EPILOG,
     MISSING_FILE,
     HELP_URL,
     COMPONENT_CC,
+    COMPONENT_CH,
+    COMPONENT_UC,
+    COMPONENT_UH,
+    COMPONENT_TYPES,
 )
 from famdb_classes import FamDB
 
@@ -82,6 +87,11 @@ def command_names(args):
     entries += args.db_dir.resolve_names(args.term)
 
     if args.format == "pretty":
+        print(
+            "Partition key — index of the component partition containing this taxon's families:\n"
+            "  cc = Curated Consensus    ch = Curated HMMs\n"
+            "  uc = Uncurated Consensus  uh = Uncurated HMMs\n"
+        )
         prev_exact = None
         for tax_id, is_exact, partition, names in entries:
             if is_exact != prev_exact:
@@ -280,6 +290,14 @@ def command_lineage(args):
     if not tree:
         return
     if args.format == "pretty":
+        print(
+            "Partition key — index of the component partition containing this taxon's families:\n"
+            "  cc = Curated Consensus    ch = Curated HMMs\n"
+            "  uc = Uncurated Consensus  uh = Uncurated HMMs\n"
+            f"Format: <NCBI tax id> <scientific name>(<partitions>) [<# families in Dfam {args.db_dir.db_version} assigned to this node>]\n"
+            "Note: family counts reflect the full Dfam release; not all partitions may be locally installed.\n"
+            "      Use 'famdb.py check <taxon>' to verify which partitions are present for a given species.\n"
+        )
         print_lineage_tree(
             args.db_dir,
             tree,
@@ -301,6 +319,69 @@ def command_lineage(args):
         )
     else:
         raise ValueError("Unimplemented lineage format: %s" % args.format)
+
+
+def command_check(args):
+    """The 'check' command reports which component partitions are locally installed for a taxon."""
+
+    target_id, _ = args.db_dir.resolve_one_species(args.term)
+    if not target_id:
+        print(f"No species found for search term '{args.term}'", file=sys.stderr)
+        return
+    if target_id == "Ambiguous":
+        return
+
+    tax_name, _ = args.db_dir.get_taxon_name(target_id, "scientific name")
+    print(f"\nPartition check for '{tax_name}' (tax id: {target_id}):\n")
+
+    component_labels = {
+        COMPONENT_CC: "Curated Consensus",
+        COMPONENT_CH: "Curated HMMs",
+        COMPONENT_UC: "Uncurated Consensus",
+        COMPONENT_UH: "Uncurated HMMs",
+    }
+    ct_key = {
+        COMPONENT_CC: "cc",
+        COMPONENT_CH: "ch",
+        COMPONENT_UC: "uc",
+        COMPONENT_UH: "uh",
+    }
+
+    components_to_check = args.component if args.component else COMPONENT_TYPES
+
+    # Collect all partitions needed: one per unique partition number across the
+    # full ancestor lineage (ancestors supply families applicable to this taxon too).
+    lineage = args.db_dir.get_lineage_path(target_id)
+    needed = {ct: set() for ct in components_to_check}
+    for _name, part_dict in lineage:
+        if part_dict is None:
+            continue
+        for ct in components_to_check:
+            pn = part_dict.get(ct)
+            if pn is not None:
+                needed[ct].add(pn)
+
+    max_label = max(len(component_labels[ct]) for ct in components_to_check)
+
+    for ct in components_to_check:
+        label = component_labels[ct]
+        partitions = sorted(needed[ct])
+        if not partitions:
+            print(f"  {label:<{max_label}}  N/A  (no families for this taxon or its ancestors)")
+        else:
+            for i, part_num in enumerate(partitions):
+                display_label = label if i == 0 else ""
+                fm_key = f"{ct_key[ct]}.{part_num}"
+                fm_entry = args.db_dir.file_map.get(fm_key, {})
+                root_name = fm_entry.get("T_root_name", "")
+                part_label = f"partition {part_num} [{root_name}]:" if root_name else f"partition {part_num}:"
+                leaf = args.db_dir.components[ct].get(part_num)
+                if leaf is not None:
+                    print(f"  {display_label:<{max_label}}  {part_label}  present")
+                else:
+                    filename = fm_entry.get("filename", f"partition {part_num}")
+                    print(f"  {display_label:<{max_label}}  {part_label}  MISSING  [{filename}]")
+    print()
 
 
 def print_families(args, families, header, species=None):
@@ -638,7 +719,7 @@ famdb.py families --help
         #  subcommands.  All subcommands will however be printed in the error message
         #  if a bad subcommand is entered as a possibility, so it doesn't hide it
         #  completely.  This is added to hide the new fasta_all command.
-        metavar="{info,names,lineage,families,family,append}",
+        metavar="{info,names,lineage,check,families,family,append}",
     )
     # INFO --------------------------------------------------------------------------------------------------------------------------------
     p_info = subparsers.add_parser(
@@ -721,6 +802,26 @@ famdb.py families --help
     )
     p_lineage.set_defaults(func=command_lineage)
 
+    # CHECK --------------------------------------------------------------------------------------------------------------------------------
+    p_check = subparsers.add_parser(
+        "check",
+        description="Check which component partitions are locally installed for a given taxon.",
+    )
+    p_check.add_argument(
+        "--component",
+        action="append",
+        choices=COMPONENT_TYPES,
+        metavar="<component>",
+        dest="component",
+        help=f"restrict check to one or more component types ({', '.join(COMPONENT_TYPES)}); may be repeated",
+    )
+    p_check.add_argument(
+        "term",
+        nargs="+",
+        help="search term. Can be an NCBI taxonomy identifier or an unambiguous scientific or common name",
+    )
+    p_check.set_defaults(func=command_check)
+
     # FAMILIES --------------------------------------------------------------------------------------------------------------------------------
     family_formats = [
         "summary",
@@ -732,7 +833,9 @@ famdb.py families --help
         "embl_meta",
         "embl_seq",
     ]
+    single_family_formats = [f for f in family_formats if f != "hmm_species"]
     family_formats_epilog = FAMILY_FORMATS_EPILOG
+    single_family_formats_epilog = SINGLE_FAMILY_FORMATS_EPILOG
 
     p_families = subparsers.add_parser(
         "families",
@@ -815,14 +918,14 @@ with a given clade, optionally filtered by additional criteria",
     p_family = subparsers.add_parser(
         "family",
         description="Retrieve details of a single family.",
-        epilog=family_formats_epilog,
+        epilog=single_family_formats_epilog,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p_family.add_argument(
         "-f",
         "--format",
         default="summary",
-        choices=family_formats,
+        choices=single_family_formats,
         metavar="<format>",
         help="choose output format.",
     )

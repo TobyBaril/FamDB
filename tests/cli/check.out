@@ -1,0 +1,9 @@
+
+Partition check for 'Genus' (tax id: 4):
+
+  Curated Consensus    partition 0 [Root Node]:  present
+  Curated HMMs         partition 1 [Root Node]:  present
+                       partition 2 [Genus Node]:  present
+  Uncurated Consensus  N/A  (no families for this taxon or its ancestors)
+  Uncurated HMMs       N/A  (no families for this taxon or its ancestors)
+

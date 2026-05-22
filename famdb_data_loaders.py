@@ -35,8 +35,8 @@ def load_taxonomy_from_db(session, relevant_nodes):
     start = time.perf_counter()
 
     for tax_node in session.execute(
-        select(dfam.NcbiTaxdbNode.tax_id, dfam.NcbiTaxdbNode.parent_id).where(
-            dfam.NcbiTaxdbNode.tax_id.in_(relevant_nodes)
+        select(dfam.NcbiTaxdbNodes.tax_id, dfam.NcbiTaxdbNodes.parent_id).where(
+            dfam.NcbiTaxdbNodes.tax_id.in_(relevant_nodes)
         )
     ).all():
         nodes[tax_node.tax_id] = TaxNode(tax_node.tax_id, tax_node.parent_id)
@@ -60,12 +60,12 @@ def load_taxonomy_from_db(session, relevant_nodes):
     # database, at the cost of memory usage TODO fix this with the filter/partition loop
     for entry in session.execute(
         select(
-            dfam.NcbiTaxdbName.tax_id,
-            dfam.NcbiTaxdbName.name_txt,
-            dfam.NcbiTaxdbName.unique_name,
-            dfam.NcbiTaxdbName.name_class,
-            dfam.NcbiTaxdbName.sanitized_name,
-        ).where(dfam.NcbiTaxdbName.tax_id.in_(relevant_nodes))
+            dfam.NcbiTaxdbNames.tax_id,
+            dfam.NcbiTaxdbNames.name_txt,
+            dfam.NcbiTaxdbNames.unique_name,
+            dfam.NcbiTaxdbNames.name_class,
+            dfam.NcbiTaxdbNames.sanitized_name,
+        ).where(dfam.NcbiTaxdbNames.tax_id.in_(relevant_nodes))
     ):
         name = entry.unique_name or entry.name_txt
         name_class = entry.name_class
@@ -244,15 +244,15 @@ def _fetch_batch_data(session, records, is_hmm, timing_stats=None,
         _ts = _t0()
         for row in session.execute(
             select(
-                dfam.FamilyAssemblyDatum.family_id,
+                dfam.FamilyAssemblyData.family_id,
                 dfam.Assembly.dfam_taxdb_tax_id,
-                dfam.FamilyAssemblyDatum.hmm_hit_GA,
-                dfam.FamilyAssemblyDatum.hmm_hit_TC,
-                dfam.FamilyAssemblyDatum.hmm_hit_NC,
-                dfam.FamilyAssemblyDatum.hmm_fdr,
+                dfam.FamilyAssemblyData.hmm_hit_GA,
+                dfam.FamilyAssemblyData.hmm_hit_TC,
+                dfam.FamilyAssemblyData.hmm_hit_NC,
+                dfam.FamilyAssemblyData.hmm_fdr,
             )
-            .where(dfam.FamilyAssemblyDatum.family_id.in_(ids))
-            .where(dfam.Assembly.id == dfam.FamilyAssemblyDatum.assembly_id)
+            .where(dfam.FamilyAssemblyData.family_id.in_(ids))
+            .where(dfam.Assembly.id == dfam.FamilyAssemblyData.assembly_id)
         ):
             assembly_map[row.family_id].append(
                 (
@@ -341,8 +341,8 @@ def _fetch_batch_data(session, records, is_hmm, timing_stats=None,
     alias_map = defaultdict(list)
     _ts = _t0()
     for row in session.execute(
-        select(dfam.FamilyDatabaseAlia).where(
-            dfam.FamilyDatabaseAlia.family_id.in_(ids)
+        select(dfam.FamilyDatabaseAlias).where(
+            dfam.FamilyDatabaseAlias.family_id.in_(ids)
         )
     ).scalars():
         alias_map[row.family_id].append(f"{row.db_id}: {row.db_link}")
@@ -377,8 +377,8 @@ def _fetch_batch_data(session, records, is_hmm, timing_stats=None,
     if is_hmm:
         _ts = _t0()
         for row in session.execute(
-            select(dfam.HmmModelDatum.family_id, dfam.HmmModelDatum.hmm).where(
-                dfam.HmmModelDatum.family_id.in_(ids)
+            select(dfam.HmmModelData.family_id, dfam.HmmModelData.hmm).where(
+                dfam.HmmModelData.family_id.in_(ids)
             )
         ):
             hmm_map[row.family_id] = row.hmm
@@ -388,8 +388,8 @@ def _fetch_batch_data(session, records, is_hmm, timing_stats=None,
     seq_count_map = {}
     _ts = _t0()
     for row in session.execute(
-        select(dfam.SeedAlignDatum.family_id, dfam.SeedAlignDatum.sequence_count).where(
-            dfam.SeedAlignDatum.family_id.in_(ids)
+        select(dfam.SeedAlignData.family_id, dfam.SeedAlignData.sequence_count).where(
+            dfam.SeedAlignData.family_id.in_(ids)
         )
     ):
         seq_count_map[row.family_id] = row.sequence_count
@@ -641,7 +641,7 @@ def iterate_db_families_by_ids(session, family_ids, is_hmm=True, batch_size=500,
                 f"build={_ms('t_build'):.2f}ms",
             ]
             total_ms = sum(timing.values()) / n * 1000
-            LOGGER.info(
+            LOGGER.debug(
                 "DB timing (%d families, %.2fms/family total): %s",
                 n, total_ms, "  ".join(lines),
             )

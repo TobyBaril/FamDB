@@ -146,6 +146,24 @@ Supported formats:
   * 'embl_seq'    : Same as 'embl', but with only the sequences included.
 """
 
+SINGLE_FAMILY_FORMATS_EPILOG = """
+Supported formats:
+  * 'summary'     : (default) A human-readable summary format. Currently includes
+                    accession, name, classification, and length.
+
+  * 'hmm'         : The family's HMM, including some additional metadata such as
+                    species and RepeatMasker classification.
+
+  * 'fasta_name'  : FASTA, with the following header format:
+                    >MIR @Mammalia [S:40,60,65]
+  * 'fasta_acc'   : FASTA, with the following header format:
+                    >DF0000001.4 @Mammalia [S:40,60,65]
+
+  * 'embl'        : EMBL, including all metadata and the consensus sequence.
+  * 'embl_meta'   : Same as 'embl', but with only the metadata included.
+  * 'embl_seq'    : Same as 'embl', but with only the sequences included.
+"""
+
 MISSING_FILE = """
 \tTaxon in Partition %s, Partition File Not Found
 \t      

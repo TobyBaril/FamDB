@@ -1322,22 +1322,46 @@ class FamDB:
         print(f"\nInstalled Components\n--------------------")
         component_labels = {
             COMPONENT_CC: "Curated Consensus",
-            COMPONENT_CH: "Curated HMM",
+            COMPONENT_CH: "Curated HMMs",
             COMPONENT_UC: "Uncurated Consensus",
-            COMPONENT_UH: "Uncurated HMM",
+            COMPONENT_UH: "Uncurated HMMs",
         }
+        ct_key = {COMPONENT_CC: "cc", COMPONENT_CH: "ch",
+                  COMPONENT_UC: "uc", COMPONENT_UH: "uh"}
         for ct in COMPONENT_TYPES:
             label = component_labels[ct]
-            parts = self.components[ct]
-            if parts:
-                for part_num, leaf in sorted(parts.items()):
+            print(f"\n {label}:")
+            # All partitions expected for this component type, from the file map
+            expected = {
+                int(k.split(".")[1]): v
+                for k, v in self.file_map.items()
+                if k.startswith(ct_key[ct] + ".")
+            }
+            if not expected:
+                print(f"     [ Not Installed ]")
+                continue
+            is_hmm = ct in (COMPONENT_CH, COMPONENT_UH)
+            rows = []
+            for part_num in sorted(expected):
+                fm_entry = expected[part_num]
+                root_name = fm_entry.get("T_root_name", "")
+                leaf = self.components[ct].get(part_num)
+                if leaf is not None:
                     counts = leaf.get_counts()
-                    print(
-                        f" {label} partition {part_num} [{os.path.basename(leaf.filename)}]: "
-                        f"Consensi: {counts['consensus']}, HMMs: {counts['hmm']}"
-                    )
-            else:
-                print(f" {label}: [ Not Installed ]")
+                    count = counts["hmm"] if is_hmm else counts["consensus"]
+                    rows.append((part_num, fm_entry["filename"], root_name, count))
+                else:
+                    rows.append((part_num, fm_entry["filename"], root_name, None))
+            max_prefix = max(len(f"     partition {r[0]} [{r[1]}]:") for r in rows)
+            max_name = max(len(r[2]) for r in rows)
+            present = [r[3] for r in rows if r[3] is not None]
+            max_num = max((len(f"{c:,}") for c in present), default=3)
+            for part_num, filename, root_name, count in rows:
+                prefix = f"     partition {part_num} [{filename}]:"
+                if count is not None:
+                    print(f"{prefix:<{max_prefix}}  {root_name:<{max_name}}  {count:>{max_num},} families")
+                else:
+                    print(f"{prefix:<{max_prefix}}  {root_name:<{max_name}}  --- not present ---")
         print()
 
     def show_history(self):

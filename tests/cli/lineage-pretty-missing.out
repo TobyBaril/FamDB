@@ -1,3 +1,10 @@
+Partition key — index of the component partition containing this taxon's families:
+  cc = Curated Consensus    ch = Curated HMMs
+  uc = Uncurated Consensus  uh = Uncurated HMMs
+Format: <NCBI tax id> <scientific name>(<partitions>) [<# families in Dfam V1 assigned to this node>]
+Note: family counts reflect the full Dfam release; not all partitions may be locally installed.
+      Use 'famdb.py check <taxon>' to verify which partitions are present for a given species.
+
 2 Order(cc:0,ch:1) [1]
 ├─4 Genus(cc:0,ch:2) [1]
 │ └─6 Species(uc:1) [1]

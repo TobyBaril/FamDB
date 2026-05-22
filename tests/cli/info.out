@@ -16,9 +16,17 @@ Total HMMs present               : 3
 
 Installed Components
 --------------------
- Curated Consensus partition 0 [unittest.curated.consensus.0.h5]: Consensi: 3, HMMs: 0
- Curated HMM partition 1 [unittest.curated.hmm.1.h5]: Consensi: 0, HMMs: 3
- Curated HMM partition 2 [unittest.curated.hmm.2.h5]: Consensi: 0, HMMs: 0
- Uncurated Consensus partition 1 [unittest.uncurated.consensus.1.h5]: Consensi: 2, HMMs: 0
- Uncurated HMM: [ Not Installed ]
+
+ Curated Consensus:
+     partition 0 [unittest.curated.consensus.0.h5]:  Root Node  3 families
+
+ Curated HMMs:
+     partition 1 [unittest.curated.hmm.1.h5]:  Root Node   3 families
+     partition 2 [unittest.curated.hmm.2.h5]:  Genus Node  0 families
+
+ Uncurated Consensus:
+     partition 1 [unittest.uncurated.consensus.1.h5]:  Other Genus  2 families
+
+ Uncurated HMMs:
+     [ Not Installed ]
 
