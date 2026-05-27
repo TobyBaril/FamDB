@@ -39,6 +39,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   context is available in a single-family lookup).
 - `utils/file_checker.py` removed (superseded by the `check` subcommand and
   improved format validation in the core classes).
+### Known Issues
+- The `append` command uses a global uniqueness check (across all loaded
+  partition files) to skip entries already present in the database. This means
+  that if a user runs `append` with only a subset of partitions present, any
+  EMBL family whose taxonomic clades span multiple partitions will be written
+  only to the partitions available at the time of the first run. On a
+  subsequent `append` run with additional partitions present, the global check
+  will find the family in the already-written partition and skip it entirely,
+  leaving it absent from the newly added partition. Currently this is not an
+  issue because all curated consensus families fit within a single CC
+  partition, but will need to be fixed before the CC component spans more than
+  one partition. The fix requires moving the uniqueness check inside the
+  per-partition routing loop so that each leaf is checked independently.
 
 ## 2.0.5 - 2025-08-18
 - Cleaner logging during append
