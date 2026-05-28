@@ -383,7 +383,7 @@ def do_merge(db_dir, rmrb_file, dup_file, name=None, description=None):
         repbase_version = _parse_embl_version_from_header(rmrb_file)
         rb_copyright = _parse_embl_copyright_header(rmrb_file)
 
-        new_name = name or db_info["name"]
+        new_name = name or "Dfam withRBRM"
         # Avoid appending duplicate copyright blocks
         new_copyright = db_info["copyright"]
         if rb_copyright and rb_copyright not in new_copyright:

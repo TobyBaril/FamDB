@@ -64,6 +64,7 @@ from famdb_globals import (
     COMPONENT_TYPES,
 )
 from famdb_classes import FamDB
+from famdb_helper_methods import filter_curated
 
 
 def _format_partition(partition_dict):
@@ -224,7 +225,9 @@ def get_lineage_totals(
     target_id,
     curated_only=False,
     uncurated_only=False,
+    model="consensus",
     seen=None,
+    seen_present=None,
 ):
     """
     Recursively calculates the total number of families
@@ -233,25 +236,42 @@ def get_lineage_totals(
     'seen' is required to track families that are present on multiple
     lineages due to horizontal transfer and ensure each family
     is only counted one time, either as an ancestor or a descendant.
+
+    Returns [ancestor_count, descendant_count, ancestor_present, descendant_present]
+    where *_present reflects only families available in locally installed partitions
+    for the given model type ('consensus' or 'hmm').
     """
     if not seen:
         seen = set()
+    if seen_present is None:
+        seen_present = set()
 
     tax_id = tree[0]
     children = tree[1:]
     accessions = file.get_families_for_taxon(tax_id, curated_only, uncurated_only)
 
     count_here = 0
+    present_here = 0
     if accessions:
         for acc in accessions:
             if acc not in seen:
                 seen.add(acc)
                 count_here += 1
+            if acc not in seen_present:
+                is_curated = filter_curated(acc, True)
+                if model == "hmm":
+                    ct = COMPONENT_CH if is_curated else COMPONENT_UH
+                else:
+                    ct = COMPONENT_CC if is_curated else COMPONENT_UC
+                part_num = file.files[0].get_partition_for_taxon(tax_id, ct)
+                if part_num is not None and part_num in file.components.get(ct, {}):
+                    seen_present.add(acc)
+                    present_here += 1
 
     if target_id == tax_id:
         target_id = None
 
-    counts = [0, 0]
+    counts = [0, 0, 0, 0]
     for child in children:
         new_counts = get_lineage_totals(
             file,
@@ -259,15 +279,21 @@ def get_lineage_totals(
             target_id,
             curated_only,
             uncurated_only,
+            model,
             seen,
+            seen_present,
         )
         counts[0] += new_counts[0]
         counts[1] += new_counts[1]
+        counts[2] += new_counts[2]
+        counts[3] += new_counts[3]
 
     if target_id is None:
         counts[1] += count_here
+        counts[3] += present_here
     else:
         counts[0] += count_here
+        counts[2] += present_here
     return counts
 
 
@@ -312,10 +338,11 @@ def command_lineage(args):
         )
     elif args.format == "totals":
         totals = get_lineage_totals(
-            args.db_dir, tree, target_id, args.curated, args.uncurated
+            args.db_dir, tree, target_id, args.curated, args.uncurated, args.model
         )
         print(
-            f"{totals[0]} entries in ancestors; {totals[1]} lineage-specific entries"
+            f"{totals[0]} entries in ancestors; {totals[1]} lineage-specific entries; "
+            f"{totals[2]} ancestral entries present; {totals[3]} lineage-specific entries present"
         )
     else:
         raise ValueError("Unimplemented lineage format: %s" % args.format)
@@ -794,6 +821,13 @@ famdb.py families --help
         choices=["pretty", "semicolon", "totals"],
         metavar="<format>",
         help="choose output format. The default is 'pretty'. 'semicolon' is more appropriate for scripts. 'totals' displays the number of ancestral and lineage-specific families found.",
+    )
+    p_lineage.add_argument(
+        "--model",
+        default="consensus",
+        choices=["consensus", "hmm"],
+        metavar="<model>",
+        help="model type to check for local presence in 'totals' format: 'consensus' (default) or 'hmm'.",
     )
     p_lineage.add_argument(
         "term",
