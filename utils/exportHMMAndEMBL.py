@@ -92,10 +92,6 @@ from sqlalchemy import select, func, over, cast, text, Integer
 from sqlalchemy.sql import literal_column, over
 from sqlalchemy.orm import aliased
 
-# Import FamDB
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from famdb_data_loaders import iterate_db_families
-
 # Dfam admin dependencies -- set PYTHONPATH to include Dfam Schemata/ORMs/python and Lib
 try:
     import dfamorm as dfam
@@ -107,6 +103,10 @@ except ImportError as e:
         "This utility requires internal Dfam libraries.\n"
         "Add the Dfam Schemata/ORMs/python and Lib directories to PYTHONPATH."
     )
+
+# Import FamDB
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+from famdb_data_loaders import iterate_db_families
 
 LOGGER = logging.getLogger(__name__)
 
@@ -709,16 +709,64 @@ def main():
 
     logging.basicConfig()
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-l", "--log-level", default="INFO")
-    parser.add_argument(
-        "-t", "--target_size", dest="target_size", type=int, default=100_000_000_000
+    parser = argparse.ArgumentParser(
+        description=(
+            "Export Dfam family data as HMM and EMBL files, split into partitions "
+            "for use in FamDB releases. Connects to a Dfam database using the Dfam "
+            "config file and processes families in parallel batches."
+        )
     )
-    parser.add_argument("-c", "--dfam_config", dest="dfam_config")
-    parser.add_argument("-p", "--cpu", type=int, default=16, dest="cpu")
-    parser.add_argument("-q", "--quiet", dest="quiet")
-    parser.add_argument("--db-version")
-    parser.add_argument("--db-date")
+    parser.add_argument(
+        "-l", "--log-level",
+        default="INFO",
+        help="Logging level (DEBUG, INFO, WARNING, ERROR). Default: %(default)s",
+    )
+    parser.add_argument(
+        "-t", "--target_size",
+        dest="target_size",
+        type=int,
+        default=100_000_000_000,
+        help=(
+            "Target size in bytes for each output partition file. "
+            "Default: %(default)s (100 GB)"
+        ),
+    )
+    parser.add_argument(
+        "-c", "--dfam_config",
+        dest="dfam_config",
+        help=(
+            "Path to the Dfam config file. If not specified, falls back to the "
+            "DFAM_CONF environment variable, then ../Conf/dfam.conf."
+        ),
+    )
+    parser.add_argument(
+        "-p", "--cpu",
+        type=int,
+        default=16,
+        dest="cpu",
+        help="Number of parallel worker processes to use. Default: %(default)s",
+    )
+    parser.add_argument(
+        "-q", "--quiet",
+        dest="quiet",
+        action="store_true",
+        help="Suppress the parameter summary printed at startup. Default: off",
+    )
+    parser.add_argument(
+        "--db-version",
+        help=(
+            "Override the Dfam database version string written into output file "
+            "headers. If not specified, the value is read from the database."
+        ),
+    )
+    parser.add_argument(
+        "--db-date",
+        help=(
+            "Override the Dfam database release date written into output file "
+            "headers (format: YYYY-MM-DD). If not specified, the value is read "
+            "from the database."
+        ),
+    )
 
     args = parser.parse_args()
     logging.getLogger().setLevel(getattr(logging, args.log_level.upper()))

@@ -103,17 +103,6 @@ import sys
 from sqlalchemy import create_engine, text, select
 from sqlalchemy.orm import sessionmaker
 
-try:
-    import dfamorm as dfam
-    import DfamConfig as dc
-    import DfamVersion as dfVersion
-except ImportError as e:
-    sys.exit(
-        f"Missing Dfam admin dependency: {e}\n"
-        "This utility requires internal Dfam libraries.\n"
-        "Add the Dfam Schemata/ORMs/python and Lib directories to PYTHONPATH."
-    )
-
 LOGGER = logging.getLogger(__name__)
 
 # Groups for the curated (DF*) pie chart.
@@ -709,6 +698,17 @@ def main():
     args = parser.parse_args()
 
     logging.getLogger().setLevel(getattr(logging, args.log_level.upper()))
+
+    try:
+        import dfamorm as dfam
+        import DfamConfig as dc
+        import DfamVersion as dfVersion
+    except ImportError as e:
+        sys.exit(
+            f"Missing Dfam admin dependency: {e}\n"
+            "This utility requires internal Dfam libraries.\n"
+            "Add the Dfam Schemata/ORMs/python and Lib directories to PYTHONPATH."
+        )
 
     conf   = dc.DfamConfig(args.dfam_config)
     dfamdb = create_engine(conf.getDBConnStrWPassFallback("Dfam"))
