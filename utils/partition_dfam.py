@@ -203,10 +203,10 @@ def parse_RMRB(args, session, RB_file):
                 else:
                     query = f"SELECT tax_id FROM `ncbi_taxdb_names` WHERE sanitized_name='{species}'"
                     res = tuple(conn.execute(text(query)))
-                    tax_id = res[0][0] if res else None
+                    tax_id = int(res[0][0]) if res else None
                     looked_up[species] = tax_id
                     if not tax_id:
-                        print(f"{species} Not found")
+                        LOGGER.warning(f"Could not resolve RepBase species '{species}' to an NCBI taxon; skipping")
                 fam["tax_id"] += [tax_id]
     with open(RB_file, "w+") as output:
         output.write(json.dumps(data))
@@ -235,7 +235,12 @@ def build_T_topology(args, session, topo_file, RB_file):
     if args.rep_base:
         with open(RB_file, "rb") as spec_file:
             RB_json = json.load(spec_file)
-            RB_taxa = set([str(i["tax_id"]) for i in RB_json])
+            RB_taxa = set(
+                str(tid)
+                for i in RB_json
+                for tid in i["tax_id"]
+                if tid is not None
+            )
         node_query += (
             f" UNION SELECT tax_id, parent_id from ncbi_taxdb_nodes"
             f" WHERE tax_id IN ({','.join(RB_taxa)})"
@@ -243,8 +248,8 @@ def build_T_topology(args, session, topo_file, RB_file):
 
     with session.bind.begin() as conn:
         tax_ids, parent_ids = zip(*conn.execute(text(node_query)))
-        tax_ids = list(tax_ids)
-        parent_ids = list(parent_ids)
+        tax_ids = [int(x) for x in tax_ids]
+        parent_ids = [int(x) for x in parent_ids]
 
         while True:
             missing_parents = [p for p in parent_ids if p not in tax_ids]
@@ -255,8 +260,8 @@ def build_T_topology(args, session, topo_file, RB_file):
                 f" WHERE tax_id IN ({','.join(str(n) for n in missing_parents)})"
             )
             new_taxs, new_parents = zip(*conn.execute(text(update_query)))
-            tax_ids.extend(list(new_taxs))
-            parent_ids.extend(list(new_parents))
+            tax_ids.extend([int(x) for x in new_taxs])
+            parent_ids.extend([int(x) for x in new_parents])
 
     T = {
         z[0]: {
@@ -326,8 +331,8 @@ def query_filesizes(session, model_type, curation_status, node_file):
         filesizes = {}
         famcounts = {}
         for row in conn.execute(text(node_query)):
-            filesizes[row[0]] = int(row[1]) if row[1] else 0
-            famcounts[row[0]] = int(row[2]) if row[2] else 0
+            filesizes[int(row[0])] = int(row[1]) if row[1] else 0
+            famcounts[int(row[0])] = int(row[2]) if row[2] else 0
 
         # Check once per curation_status (hmm is queried first in COMBINATIONS).
         # Families with NULL or zero length are silently zero-weighted; warn so
@@ -396,11 +401,13 @@ def apply_weights(T_topo, filesizes, famcounts, RB_json=None):
 
     if RB_json:
         for fam in RB_json:
-            tax_id = fam["tax_id"]
-            if tax_id in T:
-                T[tax_id]["filesize"] += fam["seq_size"]
-            else:
-                T[tax_id]["filesize"] = fam["seq_size"]
+            for tax_id in fam["tax_id"]:
+                if tax_id is None:
+                    continue
+                if tax_id in T:
+                    T[tax_id]["filesize"] += fam["seq_size"]
+                else:
+                    T[tax_id]["filesize"] = fam["seq_size"]
 
     # Iterative post-order accumulation (avoids recursion limit on deep trees)
     for n in _post_order(T, 1):

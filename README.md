@@ -373,50 +373,6 @@ famdb.py -i DB_DIR family --format fasta_acc DF000000001
 famdb.py -i DB_DIR family --format embl MIR3
 ```
 
-### append
-
-Add families from an EMBL-format file to an existing FamDB installation.
-
-```
-famdb.py -i DB_DIR append [--name NAME] [--description DESC] <infile> <exclusion_file>
-```
-
-The appended families must be associated with clades that already exist in the
-FamDB taxonomy. Use the `names` command to verify that the relevant clades are
-present before appending.
-
-The `exclusion_file` lists family names to skip during import, preventing
-duplicates when the EMBL source (e.g. RepBase) overlaps with Dfam content. An
-exclusion file for RepBase is provided alongside the FamDB downloads. If no
-exclusion is needed, supply an empty file.
-
-The `--name` and `--description` arguments update the database metadata so
-that `info` reflects that the files have been modified.
-
-> **Warning:** Back up your FamDB files before running append. The operation
-> can take a long time and if interrupted will leave the files in a corrupted,
-> unusable state. Running under `nohup` is recommended for large imports.
-
-```
-nohup famdb.py -i ./dfam append Additional.embl rebase_dups.names \
-    --description 'Dfam 3.9 with RepBase additions' &
-```
-
-## Admin Utilities
-
-The `utils/` directory contains scripts intended for Dfam administrators:
-
-| Script | Description |
-|:-------|:------------|
-| `partition_dfam.py` | Partitions the Dfam database into component JSON maps used by the exporter |
-| `export_dfam.py` | Exports Dfam data to FamDB v3 HDF5 files |
-| `set_ver_date.py` | Patches version and date metadata in existing FamDB files without re-exporting |
-
-These utilities require internal Dfam libraries (Schemata ORMs, DfamConfig,
-DfamVersion). Admins configure access by adding the relevant directories to
-`PYTHONPATH`. A clear error message is shown at startup if the dependencies
-are not found.
-
 ## HDF5 File Structure
 
 This section describes the internal layout of FamDB v3 HDF5 files for

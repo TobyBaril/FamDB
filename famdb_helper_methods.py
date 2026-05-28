@@ -52,14 +52,14 @@ def get_family(entry):
             #       h5py returns bytes / numpy.bytes_.
             #
             #   (b) Python repr of gzip bytes stored as a string attribute,
-            #       e.g. the literal text "b'\x1f\x8b...'" — produced when
+            #       e.g. the literal text "b'\x1f\x8b...'" - produced when
             #       str(compressed_bytes) was accidentally called before
             #       storing.  h5py returns a str starting with "b'".
             if isinstance(value, (bytes, numpy.bytes_)):
                 value = gzip.decompress(bytes(value)).decode()
             elif isinstance(value, str) and value.startswith("b'"):
                 try:
-                    raw = ast.literal_eval(value)   # str → bytes
+                    raw = ast.literal_eval(value)   # str -> bytes
                     value = gzip.decompress(raw).decode()
                 except Exception:
                     pass  # leave as-is; to_dfam_hmm will handle or skip
@@ -78,7 +78,7 @@ def get_family(entry):
         # more to reach the original HMMER3 text.
         if decoded.startswith("b'") or decoded.startswith('b"'):
             try:
-                inner = ast.literal_eval(decoded)  # repr-string → bytes
+                inner = ast.literal_eval(decoded)  # repr-string -> bytes
                 decoded = gzip.decompress(inner).decode()
             except Exception:
                 pass  # leave as-is; to_dfam_hmm will handle or skip

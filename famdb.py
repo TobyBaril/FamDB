@@ -88,7 +88,7 @@ def command_names(args):
 
     if args.format == "pretty":
         print(
-            "Partition key — index of the component partition containing this taxon's families:\n"
+            "Partition key - index of the component partition containing this taxon's families:\n"
             "  cc = Curated Consensus    ch = Curated HMMs\n"
             "  uc = Uncurated Consensus  uh = Uncurated HMMs\n"
         )
@@ -291,7 +291,7 @@ def command_lineage(args):
         return
     if args.format == "pretty":
         print(
-            "Partition key — index of the component partition containing this taxon's families:\n"
+            "Partition key - index of the component partition containing this taxon's families:\n"
             "  cc = Curated Consensus    ch = Curated HMMs\n"
             "  uc = Uncurated Consensus  uh = Uncurated HMMs\n"
             f"Format: <NCBI tax id> <scientific name>(<partitions>) [<# families in Dfam {args.db_dir.db_version} assigned to this node>]\n"

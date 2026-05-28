@@ -237,7 +237,7 @@ def _fetch_batch_data(session, records, is_hmm, timing_stats=None,
         )
     _acc("q_buffer_stages", _ts)
 
-    # taxa-specific thresholds — HMM component only
+    # taxa-specific thresholds - HMM component only
     # {family_id: [(tax_id, ga, tc, nc, fdr), ...]}
     assembly_map = defaultdict(list)
     if is_hmm:
@@ -265,7 +265,7 @@ def _fetch_batch_data(session, records, is_hmm, timing_stats=None,
             )
         _acc("q_assembly", _ts)
 
-    # features: two-level query — features first, then attributes for all feature IDs
+    # features: two-level query - features first, then attributes for all feature IDs
     # {family_id: [feature_dict, ...]}
     # Skipped entirely when families_with_features is provided and none of the
     # current batch IDs appear in it, avoiding redundant table scans.
@@ -372,7 +372,7 @@ def _fetch_batch_data(session, records, is_hmm, timing_stats=None,
         )
     _acc("q_citations", _ts)
 
-    # HMM blobs — HMM component only: {family_id: compressed_blob}
+    # HMM blobs - HMM component only: {family_id: compressed_blob}
     hmm_map = {}
     if is_hmm:
         _ts = _t0()
@@ -412,7 +412,7 @@ def _fetch_batch_data(session, records, is_hmm, timing_stats=None,
 def _build_family(record, bd, class_db, is_hmm, defer_model_decompress=False):
     """Populate a Family object from a DB record and pre-fetched batch data.
 
-    defer_model_decompress: if True, skip gzip.decompress for the HMM blob —
+    defer_model_decompress: if True, skip gzip.decompress for the HMM blob -
     the caller is responsible for decompressing and setting family.model before
     use.  The blob is available via bd["hmm"].get(record.id).
     """
@@ -459,7 +459,7 @@ def _build_family(record, bd, class_db, is_hmm, defer_model_decompress=False):
     if bs_values:
         family.buffer_stages = ",".join(bs_values)
 
-    # taxa-specific thresholds — HMM component only
+    # taxa-specific thresholds - HMM component only
     if is_hmm:
         th_values = []
         for tax_id, spec_ga, spec_tc, spec_nc, spec_fdr in bd["assembly"].get(
@@ -497,7 +497,7 @@ def _build_family(record, bd, class_db, is_hmm, defer_model_decompress=False):
     if citation_values:
         family.citations = json.dumps(citation_values)
 
-    # MODEL DATA + METADATA — HMM component only
+    # MODEL DATA + METADATA - HMM component only
     if is_hmm:
         hmm_blob = bd["hmm"].get(record.id)
         if hmm_blob and not defer_model_decompress:
@@ -538,7 +538,7 @@ def iterate_db_families_by_ids(session, family_ids, is_hmm=True, batch_size=500,
     """Returns an iterator over families fetched by primary key list.
 
     Unlike iterate_db_families, this does not require a pre-built streaming
-    query — it fetches family records directly by ID in batches, making it
+    query - it fetches family records directly by ID in batches, making it
     suitable for use when the set of family IDs is pre-computed (e.g. from
     precompute_family_partitions).
 
@@ -551,7 +551,7 @@ def iterate_db_families_by_ids(session, family_ids, is_hmm=True, batch_size=500,
 
     Logs a per-query timing breakdown at INFO level when the iterator is
     exhausted (or closed).  This reveals which SQL relationship query
-    (clades, hmm blobs, assembly thresholds, …) is consuming the most wall
+    (clades, hmm blobs, assembly thresholds, ...) is consuming the most wall
     time so bottlenecks can be targeted.
     """
     class_db = load_classification(session)

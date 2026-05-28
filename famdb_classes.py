@@ -882,7 +882,7 @@ up with the 'names' command.""",
         All families (curated + uncurated) are included.
 
         Accessions are stored as a variable-length string dataset under each
-        taxon group — one dataset write per taxon instead of one sub-group
+        taxon group - one dataset write per taxon instead of one sub-group
         per accession.  get_families_for_taxon() reads the dataset back.
         """
         LOGGER.info("Writing Lookup/ByTaxon to root file")
@@ -920,7 +920,7 @@ up with the 'names' command.""",
 
     def _add_family_taxon_links(self, accession, clade_ids):
         """
-        Add a single family→taxon mapping to Lookup/ByTaxon.
+        Add a single family->taxon mapping to Lookup/ByTaxon.
         Called during append to update the root index without a full rewrite.
         No changelog entry is created (individual additions are logged at the
         FamDB level).
@@ -969,12 +969,12 @@ class FamDB:
         Initialize from a directory containing a v3 famdb dataset.
 
         File naming convention:
-          <base>.0.h5                              — root file (taxonomy index)
-          <base>.<curated|uncurated>.<consensus|hmm>.<N>.h5  — component files
+          <base>.0.h5                              - root file (taxonomy index)
+          <base>.<curated|uncurated>.<consensus|hmm>.<N>.h5  - component files
 
         self.files[0]        = FamDBRoot (root file)
         self.components      = {component_type: {partition_num: FamDBLeaf}}
-        self.files           = {0: root} ∪ {all component leaf files keyed by a
+        self.files           = {0: root} union {all component leaf files keyed by a
                                  unique int id} for backward-compat with internal
                                  helpers that iterate self.files.
         """
@@ -988,7 +988,7 @@ class FamDB:
 
         # First pass: locate the root file and determine the base prefix
         for filename in h5_files:
-            # Skip component files — they also match the root regex when partition=0
+            # Skip component files - they also match the root regex when partition=0
             if FAMDB_COMPONENT_FILE_RE.match(filename):
                 continue
             m = FAMDB_ROOT_FILE_RE.match(filename)
@@ -1023,7 +1023,7 @@ class FamDB:
             if prefix != db_prefix:
                 continue
             part_num = int(part_str)
-            # Map (curated|uncurated, consensus|hmm) → component type
+            # Map (curated|uncurated, consensus|hmm) -> component type
             component_type = (
                 COMPONENT_CC if curated_str == "curated" and model_str == "consensus" else
                 COMPONENT_CH if curated_str == "curated" and model_str == "hmm" else
@@ -1183,7 +1183,7 @@ class FamDB:
 
         LOGGER.info("Pruned Tree Prepared")
 
-        # update database nodes — changelog only on root, not all leaf files
+        # update database nodes - changelog only on root, not all leaf files
         message = "Pruned Tree Written"
         ts = self.files[0].update_changelog(message)
         self.files[0].update_pruned_taxa(tree)

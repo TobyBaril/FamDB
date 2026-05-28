@@ -158,7 +158,7 @@ def _usage():
 
 def build_taxonomy_tree(conn):
     """
-    Build a parent→children taxonomy tree covering all nodes in dfam_taxdb,
+    Build a parent->children taxonomy tree covering all nodes in dfam_taxdb,
     plus any ancestors needed to connect them to the root.
 
     Returns {tax_id: {"parent": parent_id | None, "children": [child_ids]}}.
@@ -242,7 +242,7 @@ def subtree_taxa_db(conn, taxon_id):
             "WHERE tax_id = :tid AND name_class = 'scientific name'"
         ), {"tid": taxon_id}).first()
     if not row:
-        LOGGER.warning(f"  taxon {taxon_id} not found — skipping")
+        LOGGER.warning(f"  taxon {taxon_id} not found - skipping")
         return set()
 
     name = row[0]
@@ -427,9 +427,9 @@ def run_suggest(conn, T, min_fraction, max_groups):
     uncur_ids = greedy_cut(T, sub_uncur, min_fraction, max_groups)
 
     if not cur_ids:
-        LOGGER.warning("No curated groups found — try lowering --min-fraction")
+        LOGGER.warning("No curated groups found - try lowering --min-fraction")
     if not uncur_ids:
-        LOGGER.error("No uncurated groups found — try lowering --min-fraction")
+        LOGGER.error("No uncurated groups found - try lowering --min-fraction")
         sys.exit(1)
 
     all_ids = list(set(cur_ids) | set(uncur_ids))

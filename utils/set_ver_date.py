@@ -241,7 +241,7 @@ def collect_h5_files(input_path, input_type):
         if re.match(r"\S+\.\d+\.h5$", basename):
             return [input_path]
         LOGGER.warning(
-            f"File {input_path!r} does not match a known FamDB filename pattern — "
+            f"File {input_path!r} does not match a known FamDB filename pattern - "
             "processing anyway."
         )
         return [input_path]
@@ -291,7 +291,7 @@ def main():
     if not any([args.db_version, args.db_date, args.db_name,
                 args.db_description, args.file_info]):
         parser.error(
-            "Nothing to do — specify at least one of: "
+            "Nothing to do - specify at least one of: "
             "--db-version, --db-date, --db-name, --db-description, --file-info"
         )
 
