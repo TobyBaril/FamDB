@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-download_famdb.py - Interactive downloader for FamDB component files from Dfam.
+download_dfam.py - Interactive downloader for FamDB component files from Dfam.
 
 Fetches the available release from the Dfam server, lets you choose which
 components and partitions to download, validates MD5 checksums, and
@@ -9,7 +9,7 @@ decompresses the files into Libraries/famdb/ (or a user-specified directory).
 Recoverable: already-decompressed files are skipped; partially-downloaded
 .gz files are re-verified before re-downloading.
 
-Usage: download_famdb.py [-h] [-o OUTPUT_DIR] [-u URL] [--dry-run]
+Usage: download_dfam.py [-h] [-o OUTPUT_DIR] [-u URL] [--dry-run]
 """
 
 import argparse
