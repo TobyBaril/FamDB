@@ -626,7 +626,7 @@ def export_families(
 
     # if not args.include_uncurated and not args.db_partition:
     #    query = query.filter(dfam.Family.accession.like("DF%"))
-    # query = query.filter(dfam.Family.disabled != 1)
+    query = query.filter(dfam.Family.disabled != 1)
     hmm_curated_file = open(
         "batch-" + str(start) + "-" + str(end) + "-curated_only.hmm", "w"
     )
@@ -798,7 +798,7 @@ def main():
         print(f"# db_date      : {db_date}")
         print(f"# target size  : {args.target_size}")
 
-    total_families = session.query(func.count(dfam.Family.id)).scalar()
+    total_families = session.query(func.count(dfam.Family.id)).filter(dfam.Family.disabled != 1).scalar()
     threads = args.cpu
     batch_size = total_families // threads
 
@@ -819,6 +819,7 @@ def main():
             id,
             CEIL((@row_number := @row_number + 1) / :batch_size) AS batch_number
         FROM family
+        WHERE disabled != 1
         ORDER BY id
     ) subquery
     GROUP BY batch_number;
