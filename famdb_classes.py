@@ -452,6 +452,12 @@ class FamDBLeaf:
         #       at some point.  This needs to be refactored to scale appropriately.
         # There are 24,768 names as of Dfam 3.8 - Anthony
         entry = self.file[GROUP_LOOKUP_BYNAME].get(name)
+        if entry is None:
+            name_lower = name.lower()
+            for key in self.file[GROUP_LOOKUP_BYNAME].keys():
+                if key.lower() == name_lower:
+                    entry = self.file[GROUP_LOOKUP_BYNAME][key]
+                    break
         return get_family(entry)
 
 
