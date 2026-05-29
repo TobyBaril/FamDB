@@ -588,6 +588,58 @@ def print_families(args, families, header, species=None):
             print(entry, end="")
 
 
+def _diagnose_missing_accessions(db_dir, missing_accessions, term):
+    """
+    Classify accessions that were in the index but not found in any component
+    file, then emit a targeted error or warning.
+
+    If the missing accessions are all of one curatedness type and the
+    corresponding component files are simply absent, that is an expected
+    partial-installation situation and deserves a clear ERROR.  Anything
+    else is an unexpected data-integrity problem and gets a WARNING.
+    """
+    if not missing_accessions:
+        return
+
+    uncurated_missing = [a for a in missing_accessions if not filter_curated(a, True)]
+    curated_missing   = [a for a in missing_accessions if filter_curated(a, True)]
+
+    uc_present = bool(db_dir.components[COMPONENT_UC]) or bool(db_dir.components[COMPONENT_UH])
+    cc_present = bool(db_dir.components[COMPONENT_CC]) or bool(db_dir.components[COMPONENT_CH])
+
+    unexplained = []
+
+    if uncurated_missing and not uc_present:
+        ex = uncurated_missing[0]
+        LOGGER.error(
+            "%d uncurated accession(s) (e.g. %s) were requested for '%s' however "
+            "the uncurated component is not present on this system.  Please use "
+            "'./famdb.py check \"%s\"' to locate missing partitions or change your "
+            "--format/--curated/--uncurated options.",
+            len(uncurated_missing), ex, term, term,
+        )
+    else:
+        unexplained.extend(uncurated_missing)
+
+    if curated_missing and not cc_present:
+        ex = curated_missing[0]
+        LOGGER.error(
+            "%d curated accession(s) (e.g. %s) were requested for '%s' however "
+            "the curated component is not present on this system.  Please use "
+            "'./famdb.py check \"%s\"' to locate missing partitions or change your "
+            "--format/--curated/--uncurated options.",
+            len(curated_missing), ex, term, term,
+        )
+    else:
+        unexplained.extend(curated_missing)
+
+    for acc in unexplained:
+        LOGGER.warning(
+            "Accession %s found in index but missing from all loaded component files "
+            "(possible data integrity issue)", acc
+        )
+
+
 def command_family(args):
     """The 'family' command outputs a single family by name or accession."""
     family = args.db_dir.get_family_by_accession_merged(args.accession)
@@ -596,6 +648,8 @@ def command_family(args):
 
     if family:
         print_families(args, [family], False)
+    else:
+        _diagnose_missing_accessions(args.db_dir, [args.accession], args.accession)
 
 
 def command_families(args):
@@ -606,8 +660,6 @@ def command_families(args):
         return
     elif target_id == "Ambiguous":
         return
-
-    families = []
 
     is_hmm = args.format.startswith("hmm")
 
@@ -631,10 +683,20 @@ def command_families(args):
     # For formats that need both consensus and pHMM data, use the merged getter
     needs_merge = is_hmm or "embl" in args.format
     getter = args.db_dir.get_family_by_accession_merged if needs_merge else args.db_dir.get_family_by_accession
-    families = map(getter, accessions)
+
+    missing_accessions = []
+
+    def getter_checked(acc):
+        fam = getter(acc)
+        if fam is None:
+            missing_accessions.append(acc)
+        return fam
+
+    families = filter(None, map(getter_checked, accessions))
 
     header = True if accessions else False
     print_families(args, families, header, target_id)
+    _diagnose_missing_accessions(args.db_dir, missing_accessions, args.term)
 
 
 # RepeatMasker Commands -----------------------------------------------------------------------
