@@ -119,6 +119,42 @@ def command_names(args):
         raise ValueError("Unimplemented names format: %s" % args.format)
 
 
+def _taxon_installed_count(file, tax_id, model, curated_only=False, uncurated_only=False):
+    """Returns (installed_count, total_count) for families directly assigned to tax_id.
+    model must be 'consensus' or 'hmm'."""
+    accessions = file.get_families_for_taxon(tax_id, curated_only, uncurated_only)
+    total = len(accessions)
+    if total == 0:
+        return 0, 0
+
+    if model == "hmm":
+        cur_ct, uncur_ct = COMPONENT_CH, COMPONENT_UH
+    else:
+        cur_ct, uncur_ct = COMPONENT_CC, COMPONENT_UC
+
+    cur_part = file.files[0].get_partition_for_taxon(tax_id, cur_ct)
+    uncur_part = file.files[0].get_partition_for_taxon(tax_id, uncur_ct)
+    cur_installed = cur_part is not None and cur_part in file.components.get(cur_ct, {})
+    uncur_installed = uncur_part is not None and uncur_part in file.components.get(uncur_ct, {})
+
+    if curated_only:
+        return (total if cur_installed else 0), total
+    if uncurated_only:
+        return (total if uncur_installed else 0), total
+
+    if cur_installed and uncur_installed:
+        return total, total
+    if not cur_installed and not uncur_installed:
+        return 0, total
+
+    installed = sum(
+        1 for acc in accessions
+        if (filter_curated(acc, True) and cur_installed)
+        or (not filter_curated(acc, True) and uncur_installed)
+    )
+    return installed, total
+
+
 def print_lineage_tree(
     file,
     tree,
@@ -126,6 +162,7 @@ def print_lineage_tree(
     gutter_children,
     curated_only=False,
     uncurated_only=False,
+    model=None,
 ):
     """Pretty-prints a lineage tree with box drawing characters."""
 
@@ -137,16 +174,15 @@ def print_lineage_tree(
     else:
         tax_id = tree[0]
         children = tree[1:]
-    name, tax_partition = file.get_taxon_name(tax_id, "scientific name")
+    name, _tax_partition = file.get_taxon_name(tax_id, "scientific name")
     if name != "Not Found":
-        fams = file.get_families_for_taxon(
-            tax_id,
-            curated_only=curated_only,
-            uncurated_only=uncurated_only,
-        )
-        num_fams = len(fams) if fams is not None else 0
-        count = f"[{num_fams}]"
-        print(f"{gutter_self}{tax_id} {name}({_format_partition(tax_partition)}) {count}")
+        if model is not None:
+            installed, total = _taxon_installed_count(file, tax_id, model, curated_only, uncurated_only)
+            count = f"[{installed}/{total}]"
+        else:
+            total = len(file.get_families_for_taxon(tax_id, curated_only, uncurated_only))
+            count = f"[{total}]"
+        print(f"{gutter_self}{tax_id} {name} {count}")
 
     # All but the last child need a downward-pointing line that will link up
     # to the next child, so this is split into two cases
@@ -159,6 +195,7 @@ def print_lineage_tree(
                 gutter_children + "│ ",
                 curated_only,
                 uncurated_only,
+                model,
             )
 
     if children:
@@ -169,6 +206,7 @@ def print_lineage_tree(
             gutter_children + "  ",
             curated_only,
             uncurated_only,
+            model,
         )
 
 
@@ -317,14 +355,30 @@ def command_lineage(args):
     if not tree:
         return
     if args.format == "pretty":
-        print(
-            "Partition key - index of the component partition containing this taxon's families:\n"
-            "  cc = Curated Consensus    ch = Curated HMMs\n"
-            "  uc = Uncurated Consensus  uh = Uncurated HMMs\n"
-            f"Format: <NCBI tax id> <scientific name>(<partitions>) [<# families in Dfam {args.db_dir.db_version} assigned to this node>]\n"
-            "Note: family counts reflect the full Dfam release; not all partitions may be locally installed.\n"
-            "      Use 'famdb.py check <taxon>' to verify which partitions are present for a given species.\n"
-        )
+        if args.model is not None:
+            if args.curated:
+                count_note = "curated family consensus sequences"
+            elif args.uncurated:
+                count_note = "uncurated (DR) family consensus sequences"
+            else:
+                count_note = "curated (DF) and uncurated (DR) families"
+        else:
+            if args.curated:
+                count_note = "curated (DF) families"
+            elif args.uncurated:
+                count_note = "uncurated (DR) families"
+            else:
+                count_note = "curated (DF) and uncurated (DR) families"
+        if args.model is not None:
+            print(
+                f"# Format: <NCBI tax ID> <scientific name> [<# families_installed>/<# families in Dfam {args.db_dir.db_version}>]\n"
+                f"#        where counts represent {count_note}\n"
+            )
+        else:
+            print(
+                f"# Format: <NCBI tax ID> <scientific name> [<# families>]\n"
+                f"#        where counts represent {count_note}\n"
+            )
         print_lineage_tree(
             args.db_dir,
             tree,
@@ -332,6 +386,7 @@ def command_lineage(args):
             "",
             args.curated,
             args.uncurated,
+            args.model,
         )
     elif args.format == "semicolon":
         print_lineage_semicolons(
@@ -339,7 +394,8 @@ def command_lineage(args):
         )
     elif args.format == "totals":
         totals = get_lineage_totals(
-            args.db_dir, tree, target_id, args.curated, args.uncurated, args.model
+            args.db_dir, tree, target_id, args.curated, args.uncurated,
+            args.model or "consensus",
         )
         print(
             f"{totals[0]} entries in ancestors; {totals[1]} lineage-specific entries; "
@@ -825,10 +881,10 @@ famdb.py families --help
     )
     p_lineage.add_argument(
         "--model",
-        default="consensus",
+        default=None,
         choices=["consensus", "hmm"],
         metavar="<model>",
-        help="model type to check for local presence in 'totals' format: 'consensus' (default) or 'hmm'.",
+        help="model type ('consensus' or 'hmm'). In 'pretty' format, enables [present/total] counts showing locally installed families. In 'totals' format, selects which model type to check (defaults to 'consensus').",
     )
     p_lineage.add_argument(
         "term",
