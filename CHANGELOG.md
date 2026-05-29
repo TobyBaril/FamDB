@@ -25,6 +25,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `lineage` pretty header now shows the Dfam release version in the family
   count description and notes that counts reflect the full release regardless
   of which partitions are locally installed.
+- `famdb.conf` configuration file added to the installation directory.
+  Setting `FAMDB_DATA_DIR` in this file provides a site-wide default data
+  directory so the `-i` option can be omitted from every `famdb.py` invocation.
+- `utils/download_dfam.py` added: interactive downloader that fetches FamDB
+  component files from the Dfam server, validates MD5 checksums, and
+  decompresses files into the configured data directory.
+- `utils/merge_repbase.py` moved from RepeatMasker to FamDB. Merges RepBase
+  RepeatMasker Edition (RMRB) EMBL families into locally-installed CC partition
+  files with state tracking and idempotent re-run support.
 - `export_dfam.py` and `partition_dfam.py` moved to the `utils/` directory
   alongside other admin tools.
 - Admin utilities (`export_dfam.py`, `partition_dfam.py`) no longer embed

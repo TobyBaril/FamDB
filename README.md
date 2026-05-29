@@ -84,6 +84,22 @@ generally not be installed or upgraded manually.
 FamDB can also be downloaded separately. The latest release is at:
 <https://github.com/Dfam-consortium/FamDB/releases/latest>
 
+### Configuration file (famdb.conf)
+
+`famdb.conf` is an optional INI-style configuration file in the FamDB
+installation directory. It allows you to set a default data directory so
+the `-i` option can be omitted from every command:
+
+```ini
+[famdb]
+FAMDB_DATA_DIR = /usr/local/RepeatMasker/Libraries/famdb
+```
+
+Precedence order:
+1. `-i` / `--db-dir` command-line option (highest)
+2. `FAMDB_DATA_DIR` in `famdb.conf` (if the directory exists)
+3. `Libraries/famdb` relative to the `famdb.py` installation directory
+
 ### Obtaining FamDB files
 
 FamDB files for the current Dfam release are available at:
@@ -372,6 +388,68 @@ famdb.py -i DB_DIR family MIR3
 famdb.py -i DB_DIR family --format fasta_acc DF000000001
 famdb.py -i DB_DIR family --format embl MIR3
 ```
+
+## Utilities
+
+The `utils/` directory contains two end-user utilities. The remaining scripts
+in that directory are administrative tools used to build and maintain Dfam
+releases and are not intended for general use.
+
+### download_dfam.py
+
+Interactive downloader for FamDB component files from the Dfam server.
+
+```
+utils/download_dfam.py [-h] [-o OUTPUT_DIR] [-u URL] [--dry-run]
+```
+
+The script fetches the current release index from Dfam, presents a menu of
+available components and partitions, downloads the selected `.gz` files,
+validates MD5 checksums, and decompresses them into the output directory.
+
+| Option | Description |
+|:-------|:------------|
+| `-o OUTPUT_DIR` | Destination directory (default: `FAMDB_DATA_DIR` from `famdb.conf`, or `Libraries/famdb/`) |
+| `-u URL` | Override the Dfam download URL |
+| `--dry-run` | Show what would be downloaded without fetching anything |
+
+Already-decompressed files are skipped automatically, making the script safe
+to re-run after a partial download.
+
+### merge_repbase.py
+
+Merges RepBase RepeatMasker Edition (RMRB) families into locally-installed
+FamDB curated-consensus partitions.
+
+```
+utils/merge_repbase.py -i <famdb_dir>
+    [--meta RMRBMeta.embl] [--seqs RMRBSeqs.embl]
+    [--combined RMRB.embl] [--dup RMRB_DUP.txt]
+    [--name NAME] [--description DESC]
+    [--force] [-l LOG_LEVEL]
+```
+
+RepBase is distributed as two EMBL files:
+- `RMRBMeta.embl` -- taxonomy, classification, and type/subtype metadata
+- `RMRBSeqs.embl` -- consensus sequences (obtained separately from GIRI/RepBase)
+
+The script combines them into a single `RMRB.embl` (cached for reuse) and
+appends any families not already present into the appropriate CC partition
+files. A state file (`.repbase_merge_state.json`) in the FamDB directory
+tracks which partitions have been processed; re-running is safe and
+idempotent. By default the script looks for source files in `Libraries/`
+relative to the installation directory.
+
+| Option | Description |
+|:-------|:------------|
+| `-i FAMDB_DIR` | Directory containing the FamDB files (required) |
+| `--meta FILE` | Path to `RMRBMeta.embl` (default: `Libraries/RMRBMeta.embl`) |
+| `--seqs FILE` | Path to `RMRBSeqs.embl` (default: `Libraries/RMRBSeqs.embl`) |
+| `--combined FILE` | Path for the merged `RMRB.embl` cache (default: `Libraries/RMRB.embl`) |
+| `--dup FILE` | Path to duplicate-exclusion list (default: `Libraries/RMRB_DUP.txt`) |
+| `--name NAME` | Override the database name written into the files |
+| `--description DESC` | Override the database description |
+| `--force` | Re-merge even if the state file says a partition is already up to date |
 
 ## HDF5 File Structure
 
