@@ -25,8 +25,8 @@ import urllib.request
 from collections import defaultdict
 from html.parser import HTMLParser
 
-#DEFAULT_URL = "https://www.dfam.org/releases/current/families/FamDB/"
-DEFAULT_URL = "https://www.dfam.org/releases/Dfam_4.0/families/FamDB/"
+DEFAULT_URL = "https://www.dfam.org/releases/current/families/FamDB/"
+#DEFAULT_URL = "https://www.dfam.org/releases/Dfam_4.0/families/FamDB/"
 # This script lives in <install_dir>/utils/, so go up one level.
 _INSTALL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
