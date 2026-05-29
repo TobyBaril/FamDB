@@ -13,6 +13,7 @@ Usage: download_dfam.py [-h] [-o OUTPUT_DIR] [-u URL] [--dry-run]
 """
 
 import argparse
+import configparser
 import gzip
 import hashlib
 import os
@@ -24,12 +25,40 @@ import urllib.request
 from collections import defaultdict
 from html.parser import HTMLParser
 
-DEFAULT_URL = "https://www.dfam.org/releases/current/families/FamDB/"
+#DEFAULT_URL = "https://www.dfam.org/releases/current/families/FamDB/"
+DEFAULT_URL = "https://www.dfam.org/releases/Dfam_4.0/families/FamDB/"
 # This script lives in <install_dir>/utils/, so go up one level.
 _INSTALL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, _INSTALL_DIR)
-from famdb_globals import resolve_db_dir
-DEFAULT_OUT = resolve_db_dir(None)
+
+def _resolve_output_dir(cli_arg):
+    """Return (abspath, source_label) for the output directory."""
+    if cli_arg is not None:
+        return os.path.abspath(cli_arg), "command-line (-o)"
+
+    config_path = os.path.join(_INSTALL_DIR, "famdb.conf")
+    if os.path.isfile(config_path):
+        cp = configparser.ConfigParser()
+        cp.read(config_path)
+        if cp.has_option("famdb", "FAMDB_DATA_DIR"):
+            candidate = cp.get("famdb", "FAMDB_DATA_DIR").strip()
+            if candidate and os.path.isdir(candidate):
+                return os.path.abspath(candidate), "famdb.conf"
+
+    default = os.path.join(_INSTALL_DIR, "Libraries", "famdb")
+    return os.path.abspath(default), "default"
+
+
+def _detect_existing_prefix(out_dir):
+    """Return the release prefix found in out_dir's .h5 files, or None."""
+    if not os.path.isdir(out_dir):
+        return None
+    for fname in sorted(os.listdir(out_dir)):
+        if ".h5" in fname:
+            m = re.match(r"^(dfam\w+?)\.", fname)
+            if m:
+                return m.group(1)
+    return None
+
 
 # Component display order and friendly names
 COMPONENT_ORDER = ["root", "curated.consensus", "curated.hmm", "uncurated.consensus", "uncurated.hmm"]
@@ -156,7 +185,7 @@ def _parse_range_selection(text, available_set):
     return sorted(result)
 
 
-def _prompt_components(components):
+def _prompt_components(components, sizes=None, release=None):
     """Interactive component selection; returns list of chosen component names."""
     ordered = [c for c in COMPONENT_ORDER if c in components]
     ordered += [c for c in sorted(components) if c not in ordered]
@@ -167,10 +196,25 @@ def _prompt_components(components):
         label = COMPONENT_LABELS.get(comp, comp)
         n = len(parts)
         part_range = f"partition {parts[0]}" if n == 1 else f"partitions 0-{parts[-1]} ({n} total)"
-        print(f"  {i:2}. {label}")
-        print(f"        [{comp}] -- {part_range}")
+        hint = _size_hint(sizes.get(comp) if sizes else None, n)
+        req = " [required]" if comp == "root" else " [optional]"
+        print(f"  {i:2}. {label}{req}")
+        print(f"        [{comp}] -- {part_range}{hint}")
+
+    if sizes:
+        total = 0
+        for comp, parts in components.items():
+            entry = sizes.get(comp)
+            if entry:
+                first, last = entry
+                avg = first if last is None else (first + last) / 2
+                total += avg * len(parts)
+        if total:
+            label = f"Dfam {release}" if release else "complete"
+            print(f"\n  Complete {label} download would be ~{_fmt_size(total)} compressed.")
 
     print("\nEnter numbers to download (e.g. '1,3' or 'all'):")
+    print("  (Components with multiple partitions will prompt for partition selection.)")
     while True:
         raw = input("> ").strip().lower()
         if raw == "all":
@@ -188,15 +232,17 @@ def _prompt_components(components):
         print("Invalid selection, try again.")
 
 
-def _prompt_partitions(comp, available):
+def _prompt_partitions(comp, available, size_entry=None):
     """Interactive partition selection for a single component."""
     label = COMPONENT_LABELS.get(comp, comp)
+    n = len(available)
+    hint = _size_hint(size_entry, n)
 
-    if len(available) == 1:
+    if n == 1:
         print(f"\n  {label}: only 1 partition ({available[0]}), selecting it.")
         return available
 
-    print(f"\n  {label} has {len(available)} partitions (0-{available[-1]}).")
+    print(f"\n  {label} has {n} partitions (0-{available[-1]}).{hint}")
     print("  Enter partitions to download: 'all', '0', '0-5', '0,2,5-10', etc.")
     avail_set = set(available)
     while True:
@@ -243,6 +289,61 @@ def _download(url, dest, label):
         if os.path.exists(tmp):
             os.remove(tmp)
         raise
+
+
+def _head_size(url):
+    """Return Content-Length for url via HEAD, or None on failure."""
+    try:
+        req = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            val = resp.headers.get("Content-Length")
+            return int(val) if val else None
+    except Exception:
+        return None
+
+
+def _fmt_size(n):
+    """Format bytes as a human-readable string."""
+    if n >= 1_073_741_824:
+        return f"{n / 1_073_741_824:.1f} GB"
+    if n >= 1_048_576:
+        return f"{n / 1_048_576:.0f} MB"
+    return f"{n / 1024:.0f} KB"
+
+
+def fetch_component_sizes(base_url, prefix, components):
+    """
+    Return {comp: (first_size, last_size)} using HEAD requests.
+    For single-partition components last_size is None.
+    Missing entries mean all requests failed.
+    """
+    print("Fetching partition size estimates...", flush=True)
+    sizes = {}
+    for comp, parts in components.items():
+        def _gz(p, _comp=comp):
+            return (f"{prefix}.{p}.h5.gz" if _comp == "root"
+                    else f"{prefix}.{_comp}.{p}.h5.gz")
+        first = _head_size(base_url + _gz(parts[0]))
+        if first is None:
+            continue
+        last = _head_size(base_url + _gz(parts[-1])) if len(parts) > 1 else None
+        sizes[comp] = (first, last)
+    return sizes
+
+
+def _size_hint(entry, n_parts):
+    """Format a size hint string from a (first_sz, last_sz) entry."""
+    if not entry:
+        return ""
+    first, last = entry
+    if n_parts == 1:
+        return f"  ({_fmt_size(first)})"
+    if last is None:
+        return f"  (~{_fmt_size(first)} compressed per partition)"
+    lo, hi = min(first, last), max(first, last)
+    if lo == hi:
+        return f"  (~{_fmt_size(lo)} compressed per partition)"
+    return f"  ({_fmt_size(lo)} to {_fmt_size(hi)} compressed per partition)"
 
 
 def _read_md5_file(path):
@@ -346,9 +447,9 @@ def main():
     )
     ap.add_argument(
         "-o", "--output-dir",
-        default=DEFAULT_OUT,
+        default=None,
         metavar="DIR",
-        help=f"Destination directory (default: {DEFAULT_OUT})",
+        help="Destination directory (default: Libraries/famdb or famdb.conf setting)",
     )
     ap.add_argument(
         "-u", "--url",
@@ -364,7 +465,19 @@ def main():
     args = ap.parse_args()
 
     base_url = args.url.rstrip("/") + "/"
-    out_dir  = os.path.abspath(args.output_dir)
+    print("#")
+    print("# download_dfam.py")
+    print("#")
+    print("#")
+    print("# To identify the minimal set of partitions to download for a given")
+    print("# species or taxon, simply download the root partition first, and then")
+    print("# query the release details using:")
+    print("#    ./famdb.py check <species or taxon>")
+    print("#")
+
+    out_dir, out_src = _resolve_output_dir(args.output_dir)
+
+    print(f"Output directory: {out_dir}  [{out_src}]")
 
     # Navigate 2 directory levels up from the FamDB URL to find the release root
     release_root = base_url.rstrip("/").rsplit("/", 2)[0] + "/"
@@ -399,17 +512,35 @@ def main():
         print("ERROR: Could not determine release prefix from filenames.")
         sys.exit(1)
 
-    selected_components = _prompt_components(components)
+    existing_prefix = _detect_existing_prefix(out_dir)
+    if existing_prefix and existing_prefix != prefix:
+        print(f"\nWARNING: '{out_dir}' already contains files from a different release")
+        print(f"         (found: {existing_prefix!r}, downloading: {prefix!r}).")
+        print(f"         Mixing releases in the same directory will corrupt the database.")
+        raw = input("Continue anyway? [y/N] ").strip().lower()
+        if raw not in ("y", "yes"):
+            print("Aborted.")
+            sys.exit(0)
+
+    sizes = fetch_component_sizes(base_url, prefix, components)
+
+    selected_components = _prompt_components(components, sizes, release=f"{major}.{minor}")
 
     work = []
     for comp in selected_components:
-        chosen = _prompt_partitions(comp, components[comp])
+        chosen = _prompt_partitions(comp, components[comp], sizes.get(comp) if sizes else None)
         for part in chosen:
             work.append((comp, part))
 
     if not work:
         print("Nothing selected.")
         sys.exit(0)
+
+    root_in_work = any(comp == "root" for comp, _ in work)
+    root_on_disk = os.path.exists(os.path.join(out_dir, f"{prefix}.0.h5"))
+    if not root_in_work and not root_on_disk:
+        print("\nNote: Root partition is required and has been added to the download.")
+        work.insert(0, ("root", 0))
 
     print(f"\n{'[dry-run] ' if args.dry_run else ''}Downloading {len(work)} file(s) to: {out_dir}\n")
     if not args.dry_run:
