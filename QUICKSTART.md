@@ -13,6 +13,13 @@ Python 3.6 or later with the `h5py` package:
 pip3 install --user h5py
 ```
 
+Download the release from github:
+
+```
+
+```
+
+
 ---
 
 ## Step 1: Download Dfam component files

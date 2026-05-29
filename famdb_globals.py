@@ -1,3 +1,4 @@
+import configparser
 import logging
 import os
 import re
@@ -204,3 +205,33 @@ SOUNDEX_LOOKUP = {
 }
 
 TEST_DIR = os.environ.get("TMPDIR", "/tmp") + "/famdb_test"
+
+# Directory containing this file, i.e. the FamDB installation root.
+FAMDB_INSTALL_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Name of the optional site configuration file.
+FAMDB_CONFIG_FILE = "famdb.conf"
+
+
+def resolve_db_dir(db_dir_arg):
+    """Return the FamDB data directory to use.
+
+    Precedence:
+      1. db_dir_arg if provided
+      2. FAMDB_DATA_DIR from famdb.conf if the file exists, the variable is
+         set, and the path is an existing directory
+      3. Libraries/famdb relative to the installation directory
+    """
+    if db_dir_arg:
+        return db_dir_arg
+
+    config_path = os.path.join(FAMDB_INSTALL_DIR, FAMDB_CONFIG_FILE)
+    if os.path.isfile(config_path):
+        cp = configparser.ConfigParser()
+        cp.read(config_path)
+        if cp.has_option("famdb", "FAMDB_DATA_DIR"):
+            candidate = cp.get("famdb", "FAMDB_DATA_DIR").strip()
+            if candidate and os.path.isdir(candidate):
+                return candidate
+
+    return os.path.join(FAMDB_INSTALL_DIR, "Libraries", "famdb")

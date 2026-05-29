@@ -62,6 +62,7 @@ from famdb_globals import (
     COMPONENT_UC,
     COMPONENT_UH,
     COMPONENT_TYPES,
+    resolve_db_dir,
 )
 from famdb_classes import FamDB
 from famdb_helper_methods import filter_curated
@@ -1018,19 +1019,12 @@ def main():  # =================================================================
     if "term" in args:
         args.term = " ".join(args.term)
 
-    # For RepeatMasker: Try Libraries/RepeatMaskerLib.h5, if no file was specified
-    # in the arguments and that file exists.
-    if not args.db_dir:
-        # sys.path[0], if non-empty, is initially set to the directory of the
-        # originally-invoked script.
-        if sys.path[0]:
-            default_db_dir = os.path.join(sys.path[0], "Libraries/famdb")
-            if os.path.exists(default_db_dir):
-                args.db_dir = default_db_dir
+    args.db_dir = resolve_db_dir(args.db_dir)
 
-    if not (args.db_dir and os.path.exists(args.db_dir) and os.path.isdir(args.db_dir)):
+    if not (args.db_dir and os.path.isdir(args.db_dir)):
         LOGGER.error(
-            "Please specify a directory containing FamDB files to operate on with the -i/--file option."
+            "FamDB data directory not found. Use -i to specify the directory containing "
+            "the *.h5 files, or set FAMDB_DATA_DIR in famdb.conf."
         )
         exit(1)
 

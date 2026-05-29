@@ -25,10 +25,11 @@ from collections import defaultdict
 from html.parser import HTMLParser
 
 DEFAULT_URL = "https://www.dfam.org/releases/current/families/FamDB/"
-# Place files where famdb.py expects them: <install_dir>/Libraries/famdb
 # This script lives in <install_dir>/utils/, so go up one level.
 _INSTALL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_OUT = os.path.join(_INSTALL_DIR, "Libraries", "famdb")
+sys.path.insert(0, _INSTALL_DIR)
+from famdb_globals import resolve_db_dir
+DEFAULT_OUT = resolve_db_dir(None)
 
 # Component display order and friendly names
 COMPONENT_ORDER = ["root", "curated.consensus", "curated.hmm", "uncurated.consensus", "uncurated.hmm"]

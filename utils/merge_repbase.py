@@ -53,7 +53,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from famdb_classes import FamDB
-from famdb_globals import COMPONENT_CC, FAMDB_COMPONENT_FILE_RE
+from famdb_globals import COMPONENT_CC, FAMDB_COMPONENT_FILE_RE, resolve_db_dir
 
 LOGGER = logging.getLogger(__name__)
 
@@ -484,16 +484,12 @@ def main():
     args = parser.parse_args()
     logging.getLogger().setLevel(getattr(logging, args.log_level.upper(), logging.INFO))
 
-    if not args.db_dir:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        default = os.path.join(script_dir, "..", "Libraries", "famdb")
-        if os.path.isdir(default):
-            args.db_dir = default
+    args.db_dir = resolve_db_dir(args.db_dir)
 
-    if not args.db_dir or not os.path.isdir(args.db_dir):
+    if not os.path.isdir(args.db_dir):
         LOGGER.error(
-            "FamDB directory not found. Specify one with -i, or place the FamDB files "
-            "in Libraries/famdb relative to the famdb.py installation directory."
+            "FamDB data directory not found. Use -i to specify the directory containing "
+            "the *.h5 files, or set FAMDB_DATA_DIR in famdb.conf."
         )
         sys.exit(1)
 
