@@ -5,7 +5,8 @@ import json
 import sys
 
 
-from famdb_globals import LOGGER
+import logging
+LOGGER = logging.getLogger(__name__)
 
 
 class TaxNode:  # pylint: disable=too-few-public-methods

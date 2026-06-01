@@ -1,3 +1,7 @@
+Partition key — index of the component partition containing this taxon's families:
+  cc = Curated Consensus    ch = Curated HMMs
+  uc = Uncurated Consensus  uh = Uncurated HMMs
+
 Exact Matches
 =============
-Taxon: 5, Partition: 2, Names: Other Genus (scientific name), Leaf Dummy 5 (common name)
+Taxon: 5, Partition: uc:1, Names: Other Genus (scientific name), Leaf Dummy 5 (common name)

@@ -49,42 +49,37 @@ import re
 import sys
 import traceback
 
+LOGGER = logging.getLogger(__name__)
+
 from famdb_globals import (
-    LOGGER,
     FILE_DESCRIPTION,
     FAMILY_FORMATS_EPILOG,
+    SINGLE_FAMILY_FORMATS_EPILOG,
     MISSING_FILE,
     HELP_URL,
+    COMPONENT_CC,
+    COMPONENT_CH,
+    COMPONENT_UC,
+    COMPONENT_UH,
+    COMPONENT_TYPES,
+    resolve_db_dir,
 )
 from famdb_classes import FamDB
+from famdb_helper_methods import filter_curated
+
+
+def _format_partition(partition_dict):
+    """Format a partition dict as a compact string, e.g. 'cc:0,ch:1'. Returns 'N/A' if None."""
+    if partition_dict is None:
+        return "N/A"
+    parts = [f"{k}:{v}" for k, v in partition_dict.items() if v is not None]
+    return ",".join(parts) if parts else "N/A"
 
 
 # Command-line utilities
 def command_info(args):
     """The 'info' command displays some of the stored metadata."""
-    db_info = args.db_dir.get_metadata()
-    counts = args.db_dir.get_counts()
-    print()
-    print(
-        f"""\
-FamDB Directory               : {os.path.realpath(args.db_dir.db_dir)}
-FamDB Creation Format Version : {db_info["famdb_version"]}
-FamDB Creation Date           : {db_info["created"]}
-
-Database : {db_info["name"]}
-Version  : {db_info["db_version"]}
-Date     : {db_info["date"]}
-
-{db_info["description"]}
-
-{counts['file']} Partitions Present
-Total consensus sequences present: {counts["consensus"]}
-Total HMMs present               : {counts["hmm"]}
-"""
-    )
-    args.db_dir.show_files()
-    if args.history:
-        args.db_dir.show_history()
+    args.db_dir.print_info(history=args.history)
 
 
 def command_names(args):
@@ -94,6 +89,11 @@ def command_names(args):
     entries += args.db_dir.resolve_names(args.term)
 
     if args.format == "pretty":
+        print(
+            "Partition key - index of the component partition containing this taxon's families:\n"
+            "  cc = Curated Consensus    ch = Curated HMMs\n"
+            "  uc = Uncurated Consensus  uh = Uncurated HMMs\n"
+        )
         prev_exact = None
         for tax_id, is_exact, partition, names in entries:
             if is_exact != prev_exact:
@@ -106,7 +106,7 @@ def command_names(args):
                 prev_exact = is_exact
 
             print(
-                f"Taxon: {tax_id}, Partition: {partition}, Names: {', '.join([f'{n[1]} ({n[0]})' for n in names])}"
+                f"Taxon: {tax_id}, Partition: {_format_partition(partition)}, Names: {', '.join([f'{n[1]} ({n[0]})' for n in names])}"
             )
 
     elif args.format == "json":
@@ -119,6 +119,42 @@ def command_names(args):
         raise ValueError("Unimplemented names format: %s" % args.format)
 
 
+def _taxon_installed_count(file, tax_id, model, curated_only=False, uncurated_only=False):
+    """Returns (installed_count, total_count) for families directly assigned to tax_id.
+    model must be 'consensus' or 'hmm'."""
+    accessions = file.get_families_for_taxon(tax_id, curated_only, uncurated_only)
+    total = len(accessions)
+    if total == 0:
+        return 0, 0
+
+    if model == "hmm":
+        cur_ct, uncur_ct = COMPONENT_CH, COMPONENT_UH
+    else:
+        cur_ct, uncur_ct = COMPONENT_CC, COMPONENT_UC
+
+    cur_part = file.files[0].get_partition_for_taxon(tax_id, cur_ct)
+    uncur_part = file.files[0].get_partition_for_taxon(tax_id, uncur_ct)
+    cur_installed = cur_part is not None and cur_part in file.components.get(cur_ct, {})
+    uncur_installed = uncur_part is not None and uncur_part in file.components.get(uncur_ct, {})
+
+    if curated_only:
+        return (total if cur_installed else 0), total
+    if uncurated_only:
+        return (total if uncur_installed else 0), total
+
+    if cur_installed and uncur_installed:
+        return total, total
+    if not cur_installed and not uncur_installed:
+        return 0, total
+
+    installed = sum(
+        1 for acc in accessions
+        if (filter_curated(acc, True) and cur_installed)
+        or (not filter_curated(acc, True) and uncur_installed)
+    )
+    return installed, total
+
+
 def print_lineage_tree(
     file,
     tree,
@@ -126,6 +162,7 @@ def print_lineage_tree(
     gutter_children,
     curated_only=False,
     uncurated_only=False,
+    model=None,
 ):
     """Pretty-prints a lineage tree with box drawing characters."""
 
@@ -137,22 +174,15 @@ def print_lineage_tree(
     else:
         tax_id = tree[0]
         children = tree[1:]
-    name, tax_partition = file.get_taxon_name(tax_id, "scientific name")
+    name, _tax_partition = file.get_taxon_name(tax_id, "scientific name")
     if name != "Not Found":
-        fams = file.get_families_for_taxon(
-            tax_id,
-            tax_partition,
-            curated_only=curated_only,
-            uncurated_only=uncurated_only,
-        )
-        num_fams = len(fams) if fams is not None else 0
-        missing_message = MISSING_FILE % (tax_partition, file.db_dir, HELP_URL)
-        missing_message = (
-            missing_message.replace("\t", f"{gutter_self[:-2]}│ * \t")
-            + f"\n{gutter_self[:-2]}│"
-        )
-        count = f"[{num_fams}]" if fams is not None else missing_message
-        print(f"{gutter_self}{tax_id} {name}({tax_partition}) {count}")
+        if model is not None:
+            installed, total = _taxon_installed_count(file, tax_id, model, curated_only, uncurated_only)
+            count = f"[{installed}/{total}]"
+        else:
+            total = len(file.get_families_for_taxon(tax_id, curated_only, uncurated_only))
+            count = f"[{total}]"
+        print(f"{gutter_self}{tax_id} {name} {count}")
 
     # All but the last child need a downward-pointing line that will link up
     # to the next child, so this is split into two cases
@@ -165,6 +195,7 @@ def print_lineage_tree(
                 gutter_children + "│ ",
                 curated_only,
                 uncurated_only,
+                model,
             )
 
     if children:
@@ -175,6 +206,7 @@ def print_lineage_tree(
             gutter_children + "  ",
             curated_only,
             uncurated_only,
+            model,
         )
 
 
@@ -210,14 +242,10 @@ def print_lineage_semicolons(
 
         if not starting_at:
             fams = file.get_families_for_taxon(
-                tax_id, tax_partition, curated_only, uncurated_only
+                tax_id, curated_only, uncurated_only
             )
-            count = (
-                f"[{len(fams)}]"
-                if fams is not None
-                else f"(Taxon in Partition {tax_partition}, Partition File Not Found)"
-            )
-            print(f"{tax_id}({tax_partition}): {name} {count}")
+            count = f"[{len(fams)}]" if fams is not None else "[?]"
+            print(f"{tax_id}({_format_partition(tax_partition)}): {name} {count}")
 
         for child in children:
             print_lineage_semicolons(
@@ -234,11 +262,11 @@ def get_lineage_totals(
     file,
     tree,
     target_id,
-    partition,
     curated_only=False,
     uncurated_only=False,
+    model="consensus",
     seen=None,
-    present=None,
+    seen_present=None,
 ):
     """
     Recursively calculates the total number of families
@@ -247,52 +275,65 @@ def get_lineage_totals(
     'seen' is required to track families that are present on multiple
     lineages due to horizontal transfer and ensure each family
     is only counted one time, either as an ancestor or a descendant.
+
+    Returns [ancestor_count, descendant_count, ancestor_present, descendant_present]
+    where *_present reflects only families available in locally installed partitions
+    for the given model type ('consensus' or 'hmm').
     """
     if not seen:
         seen = set()
-    if not present:
-        present = set()
+    if seen_present is None:
+        seen_present = set()
 
     tax_id = tree[0]
     children = tree[1:]
-    partition = file.find_taxon(tax_id)
-    accessions = file.get_families_for_taxon(
-        tax_id, partition, curated_only, uncurated_only
-    )
+    accessions = file.get_families_for_taxon(tax_id, curated_only, uncurated_only)
 
     count_here = 0
+    present_here = 0
     if accessions:
         for acc in accessions:
             if acc not in seen:
                 seen.add(acc)
                 count_here += 1
+            if acc not in seen_present:
+                is_curated = filter_curated(acc, True)
+                if model == "hmm":
+                    ct = COMPONENT_CH if is_curated else COMPONENT_UH
+                else:
+                    ct = COMPONENT_CC if is_curated else COMPONENT_UC
+                part_num = file.files[0].get_partition_for_taxon(tax_id, ct)
+                if part_num is not None and part_num in file.components.get(ct, {}):
+                    seen_present.add(acc)
+                    present_here += 1
 
     if target_id == tax_id:
         target_id = None
 
-    counts = [0, 0]
+    counts = [0, 0, 0, 0]
     for child in children:
-        if partition is not None:
-            new_counts, new_present = get_lineage_totals(
-                file,
-                child,
-                target_id,
-                partition,
-                curated_only,
-                uncurated_only,
-                seen,
-                present,
-            )
-            counts[0] += new_counts[0]
-            counts[1] += new_counts[1]
-            present.add(partition)
-            present.update(new_present)
+        new_counts = get_lineage_totals(
+            file,
+            child,
+            target_id,
+            curated_only,
+            uncurated_only,
+            model,
+            seen,
+            seen_present,
+        )
+        counts[0] += new_counts[0]
+        counts[1] += new_counts[1]
+        counts[2] += new_counts[2]
+        counts[3] += new_counts[3]
 
     if target_id is None:
         counts[1] += count_here
+        counts[3] += present_here
     else:
         counts[0] += count_here
-    return counts, present
+        counts[2] += present_here
+    return counts
 
 
 def command_lineage(args):
@@ -314,6 +355,30 @@ def command_lineage(args):
     if not tree:
         return
     if args.format == "pretty":
+        if args.model is not None:
+            if args.curated:
+                count_note = "curated family consensus sequences"
+            elif args.uncurated:
+                count_note = "uncurated (DR) family consensus sequences"
+            else:
+                count_note = "curated (DF) and uncurated (DR) families"
+        else:
+            if args.curated:
+                count_note = "curated (DF) families"
+            elif args.uncurated:
+                count_note = "uncurated (DR) families"
+            else:
+                count_note = "curated (DF) and uncurated (DR) families"
+        if args.model is not None:
+            print(
+                f"# Format: <NCBI tax ID> <scientific name> [<# families_installed>/<# families in Dfam {args.db_dir.db_version}>]\n"
+                f"#        where counts represent {count_note}\n"
+            )
+        else:
+            print(
+                f"# Format: <NCBI tax ID> <scientific name> [<# families>]\n"
+                f"#        where counts represent {count_note}\n"
+            )
         print_lineage_tree(
             args.db_dir,
             tree,
@@ -321,29 +386,86 @@ def command_lineage(args):
             "",
             args.curated,
             args.uncurated,
+            args.model,
         )
     elif args.format == "semicolon":
         print_lineage_semicolons(
             args.db_dir, tree, "", target_id, args.curated, args.uncurated
         )
     elif args.format == "totals":
-        totals, present = get_lineage_totals(
-            args.db_dir, tree, target_id, partition, args.curated, args.uncurated
-        )
-        present = (
-            ", ".join([str(val) for val in present]) + ";" if present else partition
-        )
-        missing = (
-            " absent related partitions: "
-            + ", ".join([str(val) for val in set(tree.missing.values())])
-            if hasattr(tree, "missing")
-            else ""
+        totals = get_lineage_totals(
+            args.db_dir, tree, target_id, args.curated, args.uncurated,
+            args.model or "consensus",
         )
         print(
-            f"{totals[0]} entries in ancestors; {totals[1]} lineage-specific entries; found in partitions: {present}{missing}"
+            f"{totals[0]} entries in ancestors; {totals[1]} lineage-specific entries; "
+            f"{totals[2]} ancestral entries present; {totals[3]} lineage-specific entries present"
         )
     else:
         raise ValueError("Unimplemented lineage format: %s" % args.format)
+
+
+def command_check(args):
+    """The 'check' command reports which component partitions are locally installed for a taxon."""
+
+    target_id, _ = args.db_dir.resolve_one_species(args.term)
+    if not target_id:
+        print(f"No species found for search term '{args.term}'", file=sys.stderr)
+        return
+    if target_id == "Ambiguous":
+        return
+
+    tax_name, _ = args.db_dir.get_taxon_name(target_id, "scientific name")
+    print(f"\nPartition check for '{tax_name}' (tax id: {target_id}):\n")
+
+    component_labels = {
+        COMPONENT_CC: "Curated Consensus",
+        COMPONENT_CH: "Curated HMMs",
+        COMPONENT_UC: "Uncurated Consensus",
+        COMPONENT_UH: "Uncurated HMMs",
+    }
+    ct_key = {
+        COMPONENT_CC: "cc",
+        COMPONENT_CH: "ch",
+        COMPONENT_UC: "uc",
+        COMPONENT_UH: "uh",
+    }
+
+    components_to_check = args.component if args.component else COMPONENT_TYPES
+
+    # Collect all partitions needed: one per unique partition number across the
+    # full ancestor lineage (ancestors supply families applicable to this taxon too).
+    lineage = args.db_dir.get_lineage_path(target_id)
+    needed = {ct: set() for ct in components_to_check}
+    for _name, part_dict in lineage:
+        if part_dict is None:
+            continue
+        for ct in components_to_check:
+            pn = part_dict.get(ct)
+            if pn is not None:
+                needed[ct].add(pn)
+
+    max_label = max(len(component_labels[ct]) for ct in components_to_check)
+
+    for ct in components_to_check:
+        label = component_labels[ct]
+        partitions = sorted(needed[ct])
+        if not partitions:
+            print(f"  {label:<{max_label}}  N/A  (no families for this taxon or its ancestors)")
+        else:
+            for i, part_num in enumerate(partitions):
+                display_label = label if i == 0 else ""
+                fm_key = f"{ct_key[ct]}.{part_num}"
+                fm_entry = args.db_dir.file_map.get(fm_key, {})
+                root_name = fm_entry.get("T_root_name", "")
+                part_label = f"partition {part_num} [{root_name}]:" if root_name else f"partition {part_num}:"
+                leaf = args.db_dir.components[ct].get(part_num)
+                if leaf is not None:
+                    print(f"  {display_label:<{max_label}}  {part_label}  present")
+                else:
+                    filename = fm_entry.get("filename", f"partition {part_num}")
+                    print(f"  {display_label:<{max_label}}  {part_label}  MISSING  [{filename}]")
+    print()
 
 
 def print_families(args, families, header, species=None):
@@ -466,14 +588,68 @@ def print_families(args, families, header, species=None):
             print(entry, end="")
 
 
+def _diagnose_missing_accessions(db_dir, missing_accessions, term):
+    """
+    Classify accessions that were in the index but not found in any component
+    file, then emit a targeted error or warning.
+
+    If the missing accessions are all of one curatedness type and the
+    corresponding component files are simply absent, that is an expected
+    partial-installation situation and deserves a clear ERROR.  Anything
+    else is an unexpected data-integrity problem and gets a WARNING.
+    """
+    if not missing_accessions:
+        return
+
+    uncurated_missing = [a for a in missing_accessions if not filter_curated(a, True)]
+    curated_missing   = [a for a in missing_accessions if filter_curated(a, True)]
+
+    uc_present = bool(db_dir.components[COMPONENT_UC]) or bool(db_dir.components[COMPONENT_UH])
+    cc_present = bool(db_dir.components[COMPONENT_CC]) or bool(db_dir.components[COMPONENT_CH])
+
+    unexplained = []
+
+    if uncurated_missing and not uc_present:
+        ex = uncurated_missing[0]
+        LOGGER.error(
+            "%d uncurated accession(s) (e.g. %s) were requested for '%s' however "
+            "the uncurated component is not present on this system.  Please use "
+            "'./famdb.py check \"%s\"' to locate missing partitions or change your "
+            "--format/--curated/--uncurated options.",
+            len(uncurated_missing), ex, term, term,
+        )
+    else:
+        unexplained.extend(uncurated_missing)
+
+    if curated_missing and not cc_present:
+        ex = curated_missing[0]
+        LOGGER.error(
+            "%d curated accession(s) (e.g. %s) were requested for '%s' however "
+            "the curated component is not present on this system.  Please use "
+            "'./famdb.py check \"%s\"' to locate missing partitions or change your "
+            "--format/--curated/--uncurated options.",
+            len(curated_missing), ex, term, term,
+        )
+    else:
+        unexplained.extend(curated_missing)
+
+    for acc in unexplained:
+        LOGGER.warning(
+            "Accession %s found in index but missing from all loaded component files "
+            "(possible data integrity issue)", acc
+        )
+
+
 def command_family(args):
     """The 'family' command outputs a single family by name or accession."""
-    family = args.db_dir.get_family_by_accession(args.accession)
+    family = args.db_dir.get_family_by_accession_merged(args.accession)
     if not family:
         family = args.db_dir.get_family_by_name(args.accession)
 
     if family:
         print_families(args, [family], False)
+    else:
+        _diagnose_missing_accessions(args.db_dir, [args.accession], args.accession)
 
 
 def command_families(args):
@@ -484,8 +660,6 @@ def command_families(args):
         return
     elif target_id == "Ambiguous":
         return
-
-    families = []
 
     is_hmm = args.format.startswith("hmm")
 
@@ -506,10 +680,23 @@ def command_families(args):
             name=args.name,
         )
     )
-    families = map(args.db_dir.get_family_by_accession, accessions)
+    # For formats that need both consensus and pHMM data, use the merged getter
+    needs_merge = is_hmm or "embl" in args.format
+    getter = args.db_dir.get_family_by_accession_merged if needs_merge else args.db_dir.get_family_by_accession
+
+    missing_accessions = []
+
+    def getter_checked(acc):
+        fam = getter(acc)
+        if fam is None:
+            missing_accessions.append(acc)
+        return fam
+
+    families = filter(None, map(getter_checked, accessions))
 
     header = True if accessions else False
     print_families(args, families, header, target_id)
+    _diagnose_missing_accessions(args.db_dir, missing_accessions, args.term)
 
 
 # RepeatMasker Commands -----------------------------------------------------------------------
@@ -564,45 +751,48 @@ def command_append(args):
     file_counts = {}
     new_val_taxa = set()
     dups = set()
-    missing_files = {}
+    missing_parts = {}  # {partition_num: count}
+
+    cc_components = args.db_dir.components[COMPONENT_CC]
 
     for entry in embl_iter:
         # check installation namespace and skip entry if it already exists
-        if entry.accession in args.rb_names or not args.db_dir.check_unique(entry):
-            # LOGGER.info(
-            #     f"Skipped {entry.accession}. A family with the same accession/name is already in Dfam"
-            # )
+        # 2026/02/24: Neglected check against lowercase names
+        if entry.accession.lower in args.rb_names or not args.db_dir.check_unique(entry):
             continue
 
         total_ctr += 1
         acc = entry.accession
         added = False
 
-        # prepare set of local files to add family to
-        add_files = set()
+        # Route each clade to the appropriate CC partition file
+        add_leaves = {}   # {partition_num: FamDBLeaf}
         add_taxa = set()
         for clade in entry.clades:
-            file = args.db_dir.find_taxon(clade)
-            if args.db_dir.files.get(file):
-                if args.db_dir.files[file].has_taxon(clade):
-                    add_files.add(file)
-                    # check if the taxon is empty
-                    if not args.db_dir.get_families_for_taxon(clade, file):
-                        add_taxa.add(clade)
-            else:
-                missing_files[file] = missing_files.get(file, 0) + 1
+            part_dict = args.db_dir.find_taxon(clade)
+            cc_part = part_dict.get("cc") if part_dict else None
+            if cc_part is not None and cc_part in cc_components:
+                leaf = cc_components[cc_part]
+                add_leaves[cc_part] = leaf
+                # check if the taxon currently has no families (newly valued)
+                if not args.db_dir.get_families_for_taxon(clade):
+                    add_taxa.add(clade)
+            elif cc_part is not None:
+                missing_parts[cc_part] = missing_parts.get(cc_part, 0) + 1
 
-        if not add_files:
-            LOGGER.debug(f" {acc} not added to local files, local file not found")
+        if not add_leaves:
+            LOGGER.debug(f" {acc} not added to local files, no CC partition file found")
 
-        for file in add_files:
+        for part_num, leaf in add_leaves.items():
             try:
-                args.db_dir.files[file].add_family(entry)
-                LOGGER.debug(f"Added {acc} to file {file}")
+                leaf.add_family(entry)
+                # Update root Lookup/ByTaxon for this family
+                args.db_dir.files[0]._add_family_taxon_links(acc, entry.clades)
+                LOGGER.debug(f"Added {acc} to CC partition {part_num}")
                 if not added:
                     added_ctr += 1
                     added = True
-                file_counts[file] = file_counts.get(file, 0) + 1
+                file_counts[part_num] = file_counts.get(part_num, 0) + 1
             except Exception as e:
                 LOGGER.debug(f" Ignoring duplicate entry {entry.accession}: {e}")
                 dups.add(entry.accession)
@@ -617,10 +807,10 @@ def command_append(args):
     LOGGER.info(f"Added {added_ctr}/{total_ctr} families")
     if dups:
         LOGGER.debug(f" {len(dups)} Duplicate Accesisons: {dups}")
-    if missing_files:
-        for file in missing_files:
+    if missing_parts:
+        for part_num in missing_parts:
             LOGGER.info(
-                f"FamDB Partition File {file} Not Found. {missing_files[file]} RepBase Entries Were Not Included"
+                f"FamDB CC Partition {part_num} Not Found. {missing_parts[part_num]} Entries Were Not Included"
             )
 
     db_info = args.db_dir.get_metadata()
@@ -675,7 +865,7 @@ famdb.py families --help
         #  subcommands.  All subcommands will however be printed in the error message
         #  if a bad subcommand is entered as a possibility, so it doesn't hide it
         #  completely.  This is added to hide the new fasta_all command.
-        metavar="{info,names,lineage,families,family,append}",
+        metavar="{info,names,lineage,check,families,family,append}",
     )
     # INFO --------------------------------------------------------------------------------------------------------------------------------
     p_info = subparsers.add_parser(
@@ -752,11 +942,38 @@ famdb.py families --help
         help="choose output format. The default is 'pretty'. 'semicolon' is more appropriate for scripts. 'totals' displays the number of ancestral and lineage-specific families found.",
     )
     p_lineage.add_argument(
+        "--model",
+        default=None,
+        choices=["consensus", "hmm"],
+        metavar="<model>",
+        help="model type ('consensus' or 'hmm'). In 'pretty' format, enables [present/total] counts showing locally installed families. In 'totals' format, selects which model type to check (defaults to 'consensus').",
+    )
+    p_lineage.add_argument(
         "term",
         nargs="+",
         help="search term. Can be an NCBI taxonomy identifier or an unambiguous scientific or common name",
     )
     p_lineage.set_defaults(func=command_lineage)
+
+    # CHECK --------------------------------------------------------------------------------------------------------------------------------
+    p_check = subparsers.add_parser(
+        "check",
+        description="Check which component partitions are locally installed for a given taxon.",
+    )
+    p_check.add_argument(
+        "--component",
+        action="append",
+        choices=COMPONENT_TYPES,
+        metavar="<component>",
+        dest="component",
+        help=f"restrict check to one or more component types ({', '.join(COMPONENT_TYPES)}); may be repeated",
+    )
+    p_check.add_argument(
+        "term",
+        nargs="+",
+        help="search term. Can be an NCBI taxonomy identifier or an unambiguous scientific or common name",
+    )
+    p_check.set_defaults(func=command_check)
 
     # FAMILIES --------------------------------------------------------------------------------------------------------------------------------
     family_formats = [
@@ -769,7 +986,9 @@ famdb.py families --help
         "embl_meta",
         "embl_seq",
     ]
+    single_family_formats = [f for f in family_formats if f != "hmm_species"]
     family_formats_epilog = FAMILY_FORMATS_EPILOG
+    single_family_formats_epilog = SINGLE_FAMILY_FORMATS_EPILOG
 
     p_families = subparsers.add_parser(
         "families",
@@ -852,14 +1071,14 @@ with a given clade, optionally filtered by additional criteria",
     p_family = subparsers.add_parser(
         "family",
         description="Retrieve details of a single family.",
-        epilog=family_formats_epilog,
+        epilog=single_family_formats_epilog,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p_family.add_argument(
         "-f",
         "--format",
         default="summary",
-        choices=family_formats,
+        choices=single_family_formats,
         metavar="<format>",
         help="choose output format.",
     )
@@ -918,19 +1137,12 @@ def main():  # =================================================================
     if "term" in args:
         args.term = " ".join(args.term)
 
-    # For RepeatMasker: Try Libraries/RepeatMaskerLib.h5, if no file was specified
-    # in the arguments and that file exists.
-    if not args.db_dir:
-        # sys.path[0], if non-empty, is initially set to the directory of the
-        # originally-invoked script.
-        if sys.path[0]:
-            default_db_dir = os.path.join(sys.path[0], "Libraries/famdb")
-            if os.path.exists(default_db_dir):
-                args.db_dir = default_db_dir
+    args.db_dir = resolve_db_dir(args.db_dir)
 
-    if not (args.db_dir and os.path.exists(args.db_dir) and os.path.isdir(args.db_dir)):
+    if not (args.db_dir and os.path.isdir(args.db_dir)):
         LOGGER.error(
-            "Please specify a directory containing FamDB files to operate on with the -i/--file option."
+            "FamDB data directory not found. Use -i to specify the directory containing "
+            "the *.h5 files, or set FAMDB_DATA_DIR in famdb.conf."
         )
         exit(1)
 
@@ -948,7 +1160,7 @@ def main():  # =================================================================
 
     try:
         exclude = (
-            [int(n) for n in args.exclude_files.split(",")]
+            [n.strip() for n in args.exclude_files.split(",")]
             if args.exclude_files
             else []
         )

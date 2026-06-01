@@ -1,4 +1,5 @@
 import datetime
+import gzip
 import time
 import os
 import json
@@ -8,8 +9,10 @@ import h5py
 import numpy
 
 from famdb_helper_classes import Family, TaxNode
+import logging
+LOGGER = logging.getLogger(__name__)
+
 from famdb_globals import (
-    LOGGER,
     FAMDB_VERSION,
     GROUP_FAMILIES,
     GROUP_LOOKUP_BYNAME,
@@ -23,8 +26,16 @@ from famdb_globals import (
     DATA_VAL_CHILDREN,
     DATA_VAL_PARENT,
     DATA_TAXANAMES,
-    DATA_PARTITION,
     DATA_NAMES_CACHE,
+    DATA_PARTITION_CACHE,
+    COMPONENT_CC,
+    COMPONENT_CH,
+    COMPONENT_UC,
+    COMPONENT_UH,
+    COMPONENT_TYPES,
+    COMPONENT_META,
+    FAMDB_ROOT_FILE_RE,
+    FAMDB_COMPONENT_FILE_RE,
     META_DB_VERSION,
     META_DB_DESCRIPTION,
     META_DB_COPYRIGHT,
@@ -58,7 +69,7 @@ class FamDBLeaf:
 
     dtype_str = h5py.special_dtype(vlen=str)
 
-    def __init__(self, filename, mode="r"):
+    def __init__(self, filename, mode="r", component_type=None):
         if mode == "r":
             reading = True
 
@@ -94,13 +105,22 @@ class FamDBLeaf:
         if self.mode == "w":
             self.seen = {}
             self.added = {"consensus": 0, "hmm": 0}
+            if component_type is not None:
+                if component_type not in COMPONENT_TYPES:
+                    raise ValueError(f"Invalid component_type '{component_type}'. Expected one of {COMPONENT_TYPES}")
+                self.component_type = component_type
+                self.file.attrs["component_type"] = component_type
+            else:
+                self.component_type = None
             self.__write_metadata()
             # ensure lookups exist to avoid random breaking depending on the export data
             self.file.require_group(GROUP_LOOKUP_BYNAME)
             self.file.require_group(GROUP_LOOKUP_BYSTAGE)
-            self.file.require_group(GROUP_LOOKUP_BYTAXON)
         elif self.mode == "r+":
             self.added = self.get_counts()
+            self.component_type = self.file.attrs.get("component_type", None)
+        else:
+            self.component_type = self.file.attrs.get("component_type", None)
 
     def version_match(self):
         file_version = self.file.attrs.get(META_FAMDB_VERSION)
@@ -141,8 +161,9 @@ class FamDBLeaf:
             "set_metadata": "Metadata Set",
             "add_family": "Family Added",
             "write_repeatpeps": "RepeatPeps Written",
-            "write_taxonomy": "Taxonomy Nodes Written",
             "write_full_taxonomy": "Taxonomy Nodes Written",
+            "write_lookup_bytaxon": "ByTaxon Lookup Written",
+            "write_partition_cache": "Partition Cache Written",
             "update_description": "File Description Updated",
         }
         message = func_to_note[func.__name__]
@@ -163,11 +184,12 @@ class FamDBLeaf:
         self.file.attrs[META_DB_DESCRIPTION] = DESCRIPTION
 
     @_change_logger
-    def set_metadata(self, partition_num, map_str, name, version, date, copyright_text):
+    def set_metadata(self, partition_num, map_str, name, version, date, copyright_text, is_root=False):
         """
-        Sets database metadata for the current file
-        Stores information about other files as json string
-        Sets partition number (key to file info) and bool if is root file or not
+        Sets database metadata for the current file.
+        Stores information about other files as json string.
+        Sets partition number (key to file info) and bool if is root file or not.
+        'partition_num' may be an int (0 for root) or a string like "cc.0", "ch.1".
         """
         self.file.attrs[META_DB_NAME] = name
         self.file.attrs[META_DB_VERSION] = version
@@ -176,8 +198,8 @@ class FamDBLeaf:
 
         self.file.attrs[META_FILE_INFO] = json.dumps(map_str)
 
-        self.file.attrs["partition_num"] = partition_num
-        self.file.attrs["root"] = partition_num == "0" or partition_num == 0
+        self.file.attrs["partition_num"] = str(partition_num)
+        self.file.attrs["root"] = is_root or partition_num == "0" or partition_num == 0
 
     def finalize(self):
         """Writes some collected metadata, such as counts, to the database"""
@@ -309,7 +331,12 @@ class FamDBLeaf:
 
     # no @_change_logger here to avoid 1000s of history logs. it is called in the methods that call add_family
     def add_family(self, family):
-        """Adds the family described by 'family' to the database."""
+        """Adds the family described by 'family' to the database.
+
+        Fields not relevant to this file's component_type are stripped before
+        writing so that consensus files never store pHMM data and vice versa.
+        The original Family object is not modified.
+        """
         # Verify uniqueness of name and accession.
         # This is important because of the links created to them later.
         if not self.check_unique(family):
@@ -317,10 +344,18 @@ class FamDBLeaf:
                 f"Family is not unique! Already seen {family.accession} {f'({family.name})' if family.name else ''}"
             )
 
+        # Strip fields that don't belong to this component type.
+        # Work on attribute values directly rather than mutating the Family object.
+        is_hmm = self.component_type in (COMPONENT_CH, COMPONENT_UH) if self.component_type else False
+        is_consensus = self.component_type in (COMPONENT_CC, COMPONENT_UC) if self.component_type else True
+
+        consensus_val = family.consensus if is_consensus or not self.component_type else None
+        model_val = family.model if is_hmm or not self.component_type else None
+
         # Increment counts
-        if family.consensus:
+        if consensus_val:
             self.added["consensus"] += 1
-        if family.model:
+        if model_val:
             self.added["hmm"] += 1
 
         # Create the family data
@@ -330,11 +365,38 @@ class FamDBLeaf:
             family.accession, (0,)
         )
 
-        # Set the family attributes
+        # Set the family attributes, honouring component-type field restrictions.
+        # The model is stored separately as a gzip-compressed sibling dataset
+        # (not as an attr) so it never needs to be decompressed on load unless
+        # the caller explicitly requests it.
+        hmm_only_fields = {"model", "max_length", "is_model_masked", "seed_count",
+                           "build_method", "search_method", "taxa_thresholds", "general_cutoff"}
+        consensus_only_fields = {"consensus"}
+
         for k in Family.META_LOOKUP:
+            if k == "model":
+                continue  # model is stored as a compressed sibling dataset below
+            if k in hmm_only_fields and is_consensus and self.component_type:
+                continue
+            if k in consensus_only_fields and is_hmm and self.component_type:
+                continue
             value = getattr(family, k)
             if value:
                 dset.attrs[k] = value
+
+        # Store HMM model as a gzip-compressed uint8 dataset alongside the
+        # family dataset.  family.model may already be raw gzip bytes (from
+        # the export pickle path) or a plain string (from EMBL/HMM file import).
+        if model_val is not None:
+            if isinstance(model_val, bytes):
+                compressed = model_val          # already gzip bytes from pickle
+            else:
+                compressed = gzip.compress(model_val.encode())
+            blob = numpy.frombuffer(compressed, dtype=numpy.uint8)
+            dset.parent.create_dataset(
+                family.accession + ".model",
+                data=blob,
+            )
 
         # Create links
         fam_link = f"/{group_path}/{family.accession}"
@@ -345,12 +407,6 @@ class FamDBLeaf:
         # In FamDB format version 0.5 we removed the /Families/ByAccession group as it's redundant
         # (all the data is in Families/<datasets> *and* HDF5 suffers from poor performance when
         # the number of entries in a group exceeds 200-500k.
-
-        for clade_id in family.clades:
-            clade = str(clade_id)
-            nodes = self.file[GROUP_LOOKUP_BYTAXON]
-            if clade in nodes:
-                nodes[clade][family.accession] = h5py.SoftLink(fam_link)
 
         def add_stage_link(stage, accession):
             stage_group = self.file.require_group(GROUP_LOOKUP_BYSTAGE).require_group(
@@ -370,41 +426,7 @@ class FamDBLeaf:
 
         LOGGER.debug(f"Added family {family.name} ({family.accession})")
 
-    # Taxonomy Nodes
-    @_change_logger
-    def write_taxonomy(self, nodes):
-        """Writes taxonomy nodes to the database. These nodes only contain links to family data and not data regarding tree relationships"""
-        LOGGER.info(f"Writing taxonomy in partition")
-        start = time.perf_counter()
-
-        count = 0
-        for node in nodes:
-            count += 1
-            self.file.require_group(GROUP_LOOKUP_BYTAXON).require_group(str(node))
-        delta = time.perf_counter() - start
-        LOGGER.info(f"Wrote {count} taxonomy nodes in {delta}")
-
     # Data Access Methods ------------------------------------------------------------------------------------------------
-    def has_taxon(self, tax_id):
-        """Returns True if 'self' has a taxonomy entry for 'tax_id'"""
-        return str(tax_id) in self.file[GROUP_LOOKUP_BYTAXON]
-
-    def get_families_for_taxon(self, tax_id, curated_only=False, uncurated_only=False):
-        """Returns a list of the accessions for each family directly associated with 'tax_id'."""
-        group = (
-            self.file[GROUP_LOOKUP_BYTAXON][str(tax_id)]
-            if f"{GROUP_LOOKUP_BYTAXON}/{tax_id}" in self.file
-            else {}
-        )
-
-        # Filter out DF/DR or not at all depending on flags
-        if curated_only:
-            return list(filter(lambda a: filter_curated(a, True), group.keys()))
-        elif uncurated_only:
-            return list(filter(lambda a: filter_curated(a, False), group.keys()))
-        else:
-            return list(group.keys())
-
     def filter_stages(self, accession, stages):
         """Returns True if the family belongs to a search or buffer stage in 'stages'."""
         for stage in stages:
@@ -430,6 +452,12 @@ class FamDBLeaf:
         #       at some point.  This needs to be refactored to scale appropriately.
         # There are 24,768 names as of Dfam 3.8 - Anthony
         entry = self.file[GROUP_LOOKUP_BYNAME].get(name)
+        if entry is None:
+            name_lower = name.lower()
+            for key in self.file[GROUP_LOOKUP_BYNAME].keys():
+                if key.lower() == name_lower:
+                    entry = self.file[GROUP_LOOKUP_BYNAME][key]
+                    break
         return get_family(entry)
 
 
@@ -438,25 +466,25 @@ class FamDBRoot(FamDBLeaf):
         super(FamDBRoot, self).__init__(filename, mode)
 
         if mode == "r" or mode == "r+":
-            self.names_dump = json.loads(self.file[DATA_NAMES_CACHE][()].decode())
+            names_ds = self.file.get(DATA_NAMES_CACHE)
+            self.names_dump = json.loads(names_ds[()].decode()) if names_ds is not None else {}
+            cache_ds = self.file.get(DATA_PARTITION_CACHE)
+            self.partition_cache = json.loads(cache_ds[()].decode()) if cache_ds is not None else {}
             self.file_info = self.get_file_info()
             self.__lineage_cache = {}
 
     @FamDBLeaf._change_logger
-    def write_full_taxonomy(self, tax_db, nodes):
+    def write_full_taxonomy(self, tax_db):
         """
-        Takes a map of TaxaNodes
-        Writes taxonomy nodes to the database.
-        Includes parent-child relationships
-        Also cache all taxa names as a node:[names] json string
-        This cache is loaded on __init__ to speed up search times
+        Takes a map of TaxaNodes keyed by tax_id.
+        Writes taxonomy nodes to the database including parent-child relationships.
+        Also caches all taxa names as a node:[names] JSON string loaded at __init__.
+        Partition assignments are no longer stored per-node; use write_partition_cache()
+        after all component files are built.
         """
-        LOGGER.info(f"Writing Full Taxonomy Tree Root File")
+        LOGGER.debug(f"Writing Full Taxonomy Tree Root File")
         start = time.perf_counter()
 
-        partition_map = {
-            node: int(partition) for partition in nodes for node in nodes[partition]
-        }
         names_dump = {}
         count = 0
         for node in tax_db:
@@ -476,17 +504,14 @@ class FamDBRoot(FamDBLeaf):
             names = tax_db[node].names
             group.create_dataset(DATA_TAXANAMES, data=numpy.array(names, dtype="S"))
             names_dump[node] = names
-            group.create_dataset(
-                DATA_PARTITION, data=numpy.array([partition_map[node]])
-            )
 
-        LOGGER.info(f"Writing Name Cache String")
+        LOGGER.debug(f"Writing Name Cache String")
         self.file.create_dataset(
             DATA_NAMES_CACHE, data=numpy.array(json.dumps(names_dump), dtype="S")
         )
 
         delta = time.perf_counter() - start
-        LOGGER.info(f"Wrote {count} taxonomy nodes in full tree in {delta}")
+        LOGGER.info(f"Wrote {count} taxonomy nodes in full tree in {delta:.1f}s")
 
     def update_pruned_taxa(self, tree):
         """
@@ -566,8 +591,9 @@ class FamDBRoot(FamDBLeaf):
 
     def get_taxon_name(self, tax_id, kind="scientific name"):
         """
-        Checks names_dump for each partition and returns eturns the first name of the given 'kind'
-        for the taxon given by 'tax_id', or None if no such name was found.
+        Returns the first name of the given 'kind' for the taxon given by 'tax_id',
+        along with the component partition dict for that taxon.
+        Returns ("Not Found", "N/A") if the taxon is not found.
         """
         failure = ("Not Found", "N/A")
 
@@ -580,9 +606,9 @@ class FamDBRoot(FamDBLeaf):
             [name.decode() for name in name_pair]
             for name_pair in node[DATA_TAXANAMES][:]
         ]
-        partition = node[DATA_PARTITION][0]
+        partition = self.partition_cache.get(str(tax_id))
 
-        if names and partition is not None:
+        if names:
             for name in names:
                 if name[0] == kind:
                     return [name[1], partition]
@@ -810,14 +836,121 @@ up with the 'names' command.""",
 
         return lineage
 
+    def get_partition_for_taxon(self, tax_id, component):
+        """
+        Returns the partition number (int) for 'tax_id' in the given component,
+        or None if the taxon has no families of that component type.
+        'component' must be one of COMPONENT_CC, COMPONENT_CH, COMPONENT_UC, COMPONENT_UH.
+        """
+        entry = self.partition_cache.get(str(tax_id))
+        if entry:
+            return entry.get(component)
+        return None
+
     def find_taxon(self, tax_id):
         """
-        Returns the partition number containing the taxon
+        Returns a dict mapping component type to partition number for the given taxon.
+        e.g. {"cc": 0, "ch": 2, "uc": 1, "uh": 1}
+        Values are None for components with no families at this taxon.
+        Returns None if taxon is not in the partition cache at all.
         """
-        node = self.file[GROUP_NODES].get(str(tax_id))
-        if node:
-            return int(node[DATA_PARTITION][0])
-        return None
+        return self.partition_cache.get(str(tax_id))
+
+    def get_families_for_taxon(self, tax_id, curated_only=False, uncurated_only=False):
+        """
+        Returns a list of the accessions for each family directly associated with 'tax_id'.
+        Reads from the root file's Lookup/ByTaxon, which covers all families.
+        """
+        key = f"{GROUP_LOOKUP_BYTAXON}/{tax_id}"
+        if key not in self.file:
+            return []
+        taxon_group = self.file[key]
+        # New format: group contains an 'accessions' dataset
+        if "accessions" in taxon_group:
+            accessions = list(taxon_group["accessions"].asstr()[()])
+        else:
+            # Legacy group-of-subgroups format
+            accessions = list(taxon_group.keys())
+
+        if curated_only:
+            return list(filter(lambda a: filter_curated(a, True), accessions))
+        elif uncurated_only:
+            return list(filter(lambda a: filter_curated(a, False), accessions))
+        else:
+            return accessions
+
+    @FamDBLeaf._change_logger
+    def write_lookup_bytaxon(self, family_taxon_map):
+        """
+        Writes Lookup/ByTaxon to the root file.
+        family_taxon_map: {tax_id_str: [accession, ...]}
+        Called as a post-processing step after all component files are built.
+        All families (curated + uncurated) are included.
+
+        Accessions are stored as a variable-length string dataset under each
+        taxon group - one dataset write per taxon instead of one sub-group
+        per accession.  get_families_for_taxon() reads the dataset back.
+        """
+        LOGGER.info("Writing Lookup/ByTaxon to root file")
+        start = time.perf_counter()
+        count = 0
+        str_dtype = h5py.string_dtype()
+        bytaxon_group = self.file.require_group(GROUP_LOOKUP_BYTAXON)
+        for tax_id, accessions in family_taxon_map.items():
+            taxon_group = bytaxon_group.require_group(str(tax_id))
+            taxon_group.create_dataset(
+                "accessions",
+                data=numpy.array(accessions, dtype=object),
+                dtype=str_dtype,
+            )
+            count += len(accessions)
+        delta = time.perf_counter() - start
+        LOGGER.info(f"Wrote {count} taxon-family entries in {delta:.2f}s")
+
+    @FamDBLeaf._change_logger
+    def write_partition_cache(self, partition_cache):
+        """
+        Writes the PartitionCache JSON blob to the root file.
+        partition_cache: {tax_id_str: {"cc": int|None, "ch": int|None,
+                                        "uc": int|None, "uh": int|None}}
+        Only taxa with at least one non-None component entry are included.
+        """
+        LOGGER.info("Writing PartitionCache to root file")
+        if self.file.get(DATA_PARTITION_CACHE):
+            del self.file[DATA_PARTITION_CACHE]
+        self.file.create_dataset(
+            DATA_PARTITION_CACHE,
+            data=numpy.array(json.dumps(partition_cache), dtype="S"),
+        )
+        LOGGER.info(f"PartitionCache written ({len(partition_cache)} taxa)")
+
+    def _add_family_taxon_links(self, accession, clade_ids):
+        """
+        Add a single family->taxon mapping to Lookup/ByTaxon.
+        Called during append to update the root index without a full rewrite.
+        No changelog entry is created (individual additions are logged at the
+        FamDB level).
+        """
+        str_dtype = h5py.string_dtype()
+        bytaxon_group = self.file.require_group(GROUP_LOOKUP_BYTAXON)
+        for clade_id in clade_ids:
+            taxon_group = bytaxon_group.require_group(str(clade_id))
+            if "accessions" in taxon_group:
+                existing = list(taxon_group["accessions"].asstr()[()])
+                if accession not in existing:
+                    existing.append(accession)
+                    del taxon_group["accessions"]
+                    taxon_group.create_dataset(
+                        "accessions",
+                        data=numpy.array(existing, dtype=object),
+                        dtype=str_dtype,
+                    )
+            else:
+                taxon_group.create_dataset(
+                    "accessions",
+                    data=numpy.array([accession], dtype=object),
+                    dtype=str_dtype,
+                )
 
     def get_all_taxa_names(self):
         """
@@ -839,71 +972,76 @@ class FamDB:
 
     def __init__(self, db_dir, mode, exclude=[]):
         """
-        Initialize from a directory containing a *partitioned* famdb dataset
+        Initialize from a directory containing a v3 famdb dataset.
+
+        File naming convention:
+          <base>.0.h5                              - root file (taxonomy index)
+          <base>.<curated|uncurated>.<consensus|hmm>.<N>.h5  - component files
+
+        self.files[0]        = FamDBRoot (root file)
+        self.components      = {component_type: {partition_num: FamDBLeaf}}
+        self.files           = {0: root} union {all component leaf files keyed by a
+                                 unique int id} for backward-compat with internal
+                                 helpers that iterate self.files.
         """
         self.files = {}
+        # {component_type: {partition_num: FamDBLeaf}}
+        self.components = {ct: {} for ct in COMPONENT_TYPES}
 
-        ## First, identify if there are any root partitions of a partitioned
-        ## famdb in this directory:
-        # A partioned famdb file is named *.#.h5 where
-        # the number represents the partition number and
-        # at a minimum partitition 0 must be present.
-        root_prefixes = set()
-        prefixes = set()
-        h5_files = []
-        for file in os.listdir(db_dir):
-            if file.endswith(".h5"):
-                h5_files += [file]
-                splits = file.split(".")
-                prefix = ".".join(splits[:-2])
-                prefixes.add(prefix)
-                if file.endswith(".0.h5"):
-                    root_prefixes.add(prefix)
+        h5_files = sorted(os.listdir(db_dir))
+        root_file = None
+        db_prefix = None
 
-        # ensure only one FamDB export per folder
-        if len(prefixes) != 1:
-            LOGGER.error("Only one export of FamDB should be present in " + db_dir)
-            exit(1)
+        # First pass: locate the root file and determine the base prefix
+        for filename in h5_files:
+            # Skip component files - they also match the root regex when partition=0
+            if FAMDB_COMPONENT_FILE_RE.match(filename):
+                continue
+            m = FAMDB_ROOT_FILE_RE.match(filename)
+            if m:
+                if db_prefix is not None and m.group(1) != db_prefix:
+                    LOGGER.error(
+                        "Multiple famdb root files found in " + db_dir +
+                        ". Each famdb database should be in a separate folder."
+                    )
+                    exit(1)
+                db_prefix = m.group(1)
+                root_file = filename
 
-        # Make sure we only have at least one database present
-        if len(root_prefixes) == 0:
+        if root_file is None:
             if h5_files:
                 LOGGER.error(
-                    "A partitioned famdb database is not present in "
-                    + db_dir
-                    + "\n"
-                    + "FamDB requires exactly one root file. There were several *.h5 files present. However, they do not appear\n"
-                    + "to be in the correct format: "
-                    + "\n".join(h5_files)
-                    + "\n"
+                    "A famdb root file (*.0.h5) is not present in " + db_dir
                 )
             else:
-                LOGGER.error(
-                    "A partitioned famdb root file is not present in " + db_dir
-                )
+                LOGGER.error("No .h5 files found in " + db_dir)
             exit(1)
 
-        # Make sure we have *only* one database present
-        if len(root_prefixes) > 1:
+        self.files[0] = FamDBRoot(f"{db_dir}/{root_file}", mode)
 
-            LOGGER.error(
-                "Multiple famdb root partitions were found in this export directory: "
-                + ", ".join(root_prefixes.keys())
-                + "\nEach famdb database "
-                + "should be in separate folders."
+        # Second pass: load component files
+        _file_id_counter = 1  # unique ints for self.files backward compat
+        for filename in h5_files:
+            m = FAMDB_COMPONENT_FILE_RE.match(filename)
+            if not m:
+                continue
+            prefix, curated_str, model_str, part_str = m.groups()
+            if prefix != db_prefix:
+                continue
+            part_num = int(part_str)
+            # Map (curated|uncurated, consensus|hmm) -> component type
+            component_type = (
+                COMPONENT_CC if curated_str == "curated" and model_str == "consensus" else
+                COMPONENT_CH if curated_str == "curated" and model_str == "hmm" else
+                COMPONENT_UC if curated_str == "uncurated" and model_str == "consensus" else
+                COMPONENT_UH
             )
-            exit(1)
-
-        # Tabulate all partitions for db_prefix
-        db_prefix = list(root_prefixes)[0]
-        for file in h5_files:
-            if db_prefix in file:
-                fields = file.split(".")
-                idx = int(fields[-2])
-                if idx == 0:
-                    self.files[idx] = FamDBRoot(f"{db_dir}/{file}", mode)
-                elif idx not in exclude:
-                    self.files[idx] = FamDBLeaf(f"{db_dir}/{file}", mode)
+            if component_type in exclude:
+                continue
+            leaf = FamDBLeaf(f"{db_dir}/{filename}", mode)
+            self.components[component_type][part_num] = leaf
+            self.files[_file_id_counter] = leaf
+            _file_id_counter += 1
 
         file_info = self.files[0].get_file_info()
         self.db_dir = db_dir
@@ -912,31 +1050,76 @@ class FamDB:
         self.db_version = file_info[META_META][META_DB_VERSION]
         self.db_date = file_info[META_META][META_DB_DATE]
 
+        # Validate all component files match root metadata
         partition_err_files = []
-        for file in self.files:
-            meta = self.files[file].get_file_info()[META_META]
+        for fid, fobj in self.files.items():
+            if fid == 0:
+                continue
+            meta = fobj.get_file_info()[META_META]
             if (
                 self.uuid != meta[META_UUID]
                 or self.db_version != meta[META_DB_VERSION]
                 or self.db_date != meta[META_DB_DATE]
             ):
-                partition_err_files += [file]
+                partition_err_files.append(fobj.filename)
         if partition_err_files:
-            LOGGER.error(
-                f"Files From Different Partitioning Runs: {partition_err_files}"
-            )
+            LOGGER.error(f"Files From Different Partitioning Runs: {partition_err_files}")
             exit()
 
         change_err_files = []
-        for file in self.files:
-            interrupted = self.files[file].interrupt_check()
-            if interrupted:
-                change_err_files += [file]
+        for fobj in self.files.values():
+            if fobj.interrupt_check():
+                change_err_files.append(fobj.filename)
         if change_err_files:
             LOGGER.error(f"Files Interrupted During Edit: {change_err_files}")
             exit()
 
+    def _check_component(self, component_type):
+        """
+        Returns True if at least one file of the given component type is loaded.
+        Logs a warning if the component is missing, describing what to download.
+        """
+        if self.components.get(component_type):
+            return True
+        LOGGER.warning(
+            f"Component '{component_type}' is not installed in {self.db_dir}. "
+            f"The requested query requires this data. "
+            f"Please download the corresponding files from Dfam."
+        )
+        return False
+
     # Data writing methods ---------------------------------------------------------------------------------------
+    def _make_tax_node(self, id, hdf5_node=None, value=False, read_pruned=False):
+        """
+        Build a TaxNode from HDF5 node data.
+
+        id         : taxonomy id (string or int)
+        hdf5_node  : already-fetched HDF5 group; looked up from GROUP_NODES if None
+        value      : whether this node has associated family data (val flag)
+        read_pruned: if True, also populate val_children and val_parent from HDF5
+        """
+        if hdf5_node is None:
+            hdf5_node = self.files[0].file[GROUP_NODES][str(id)]
+        children = hdf5_node[DATA_CHILDREN][()] if hdf5_node[DATA_CHILDREN].size > 0 else []
+        parent = (
+            hdf5_node[DATA_PARENT][()][0]
+            if hdf5_node.get(DATA_PARENT) and hdf5_node[DATA_PARENT].size > 0
+            else None
+        )
+        node = TaxNode(id, str(parent) if parent else None)
+        node.val = value
+        node.children = children
+        if read_pruned:
+            node.val_children = (
+                hdf5_node[DATA_VAL_CHILDREN][()] if hdf5_node[DATA_VAL_CHILDREN].size > 0 else []
+            )
+            node.val_parent = (
+                hdf5_node[DATA_VAL_PARENT][()][0]
+                if hdf5_node.get(DATA_VAL_PARENT) and hdf5_node[DATA_VAL_PARENT].size > 0
+                else None
+            )
+        return node
+
     def build_pruned_tree(self):
         """
         Establishes a sparse taxonomy tree where parent-child relationships are restricted to
@@ -979,37 +1162,18 @@ class FamDB:
             node: self.files[0].file[GROUP_NODES][node]
             for node in self.files[0].file[GROUP_NODES]
         }
-        LOGGER.info("Mapping Nodes To Files")
-        nodes = {
-            file: list(self.files[file].file[GROUP_LOOKUP_BYTAXON].keys())
-            for file in [file for file in self.files.keys()]
-        }
         LOGGER.info("Determining Which Nodes Have Associated Families")
-        # build set of nodes with associated family data
+        # In v3 Lookup/ByTaxon lives in the root file only and covers all families
+        bytaxon = self.files[0].file[GROUP_LOOKUP_BYTAXON]
         vals = set(
-            [
-                id
-                for file in nodes
-                for id in nodes[file]
-                if bool(self.files[file].file[GROUP_LOOKUP_BYTAXON][id].keys())
-            ]
+            tax_id
+            for tax_id in bytaxon
+            if bool(bytaxon[tax_id].keys())
         )
 
         # build TaxNodes in tree
         for id in tree:
-            node = tree[id]
-            children = node[DATA_CHILDREN][()] if node[DATA_CHILDREN].size > 0 else []
-            parent = (
-                node[DATA_PARENT][()][0]
-                if node.get(DATA_PARENT) and node[DATA_PARENT].size > 0
-                else None
-            )
-            val = id in vals
-
-            tree_node = TaxNode(id, str(parent) if parent else None)
-            tree_node.val = val
-            tree_node.children = children
-            tree[id] = tree_node
+            tree[id] = self._make_tax_node(id, hdf5_node=tree[id], value=(id in vals))
 
         LOGGER.info("Full Tree Prepared")
         # assign each node a val_parent
@@ -1025,11 +1189,11 @@ class FamDB:
 
         LOGGER.info("Pruned Tree Prepared")
 
-        # update database nodes
+        # update database nodes - changelog only on root, not all leaf files
         message = "Pruned Tree Written"
-        rec = self.append_start_changelog(message)
+        ts = self.files[0].update_changelog(message)
         self.files[0].update_pruned_taxa(tree)
-        self.append_finish_changelog(message, rec)
+        self.files[0]._verify_change(ts, message)
         LOGGER.info(message)
 
     def rebuild_pruned_tree(self, new_val_taxa):
@@ -1045,31 +1209,7 @@ class FamDB:
         """
 
         def build_taxa_node(id, value=False):
-            """Builds a TaxNode object from HDF5 data"""
-            # if self.files[0].file[GROUP_NODES].get(str(id)):
-            node = self.files[0].file[GROUP_NODES][str(id)]
-            children = node[DATA_CHILDREN][()] if node[DATA_CHILDREN].size > 0 else []
-            parent = (
-                node[DATA_PARENT][()][0]
-                if node.get(DATA_PARENT) and node[DATA_PARENT].size > 0
-                else None
-            )
-            val_children = (
-                node[DATA_VAL_CHILDREN][()] if node[DATA_VAL_CHILDREN].size > 0 else []
-            )
-            val_parent = (
-                node[DATA_VAL_PARENT][()][0]
-                if node.get(DATA_VAL_PARENT) and node[DATA_VAL_PARENT].size > 0
-                else None
-            )
-
-            tree_node = TaxNode(id, str(parent) if parent else None)
-            tree_node.val = value
-            tree_node.children = children
-            tree_node.val_children = val_children
-            tree_node.val_parent = val_parent
-
-            return tree_node
+            return self._make_tax_node(id, value=value, read_pruned=True)
 
         # RMH: This parameter default pattern "foo=[]" is dangerous.  The
         #      list generated is global and gets reused between independent
@@ -1145,87 +1285,128 @@ class FamDB:
 
     def set_db_info(self, name, version, date, desc, copyright_text):
         """Method for resetting metadata"""
-        for file in self.files:
-            partition_num = self.files[file].get_partition_num()
-            file_info = self.files[file].get_file_info()
-            self.files[file].set_metadata(
-                partition_num,
-                file_info,
-                name,
-                version,
-                date,
-                copyright_text,
-            )
-            self.files[file].update_description(desc)
+        for fobj in self.files.values():
+            partition_num = fobj.get_partition_num()
+            file_info = fobj.get_file_info()
+            fobj.set_metadata(partition_num, file_info, name, version, date, copyright_text)
+            fobj.update_description(desc)
 
     def append_start_changelog(self, message):
-        """
-        Called when an append command starts
-        """
+        """Called when an append command starts"""
         rec = {}
-        for file in self.files:
-            time_stamp = self.files[file].update_changelog(message)
-            rec[file] = time_stamp
+        for fid, fobj in self.files.items():
+            rec[fid] = fobj.update_changelog(message)
         return rec
 
     def append_finish_changelog(self, message, rec):
-        """
-        Called when an append command finishes successfully
-        """
-        for file in rec:
-            self.files[file]._verify_change(rec[file], message)
+        """Called when an append command finishes successfully"""
+        for fid, timestamp in rec.items():
+            self.files[fid]._verify_change(timestamp, message)
 
     def update_changelog(self, added_ctr, total_ctr, file_counts, infile):
         """Used to add a context log after an append command"""
         filename = infile.split("/")[-1]
-        for file in self.files:
-            if file in file_counts:
-                self.files[file].update_changelog(
-                    f"Added {file_counts[file]} of {total_ctr} Families From {filename}",
+        for fid, fobj in self.files.items():
+            if fid in file_counts:
+                fobj.update_changelog(
+                    f"Added {file_counts[fid]} of {total_ctr} Families From {filename}",
                     verified=True,
                 )
             else:
-                self.files[file].update_changelog(
+                fobj.update_changelog(
                     f"Found No Relevant Families From {filename}", verified=True
                 )
-            if file == 0:
-                self.files[file].update_changelog(
+            if fid == 0:
+                fobj.update_changelog(
                     f"Total Families {added_ctr} of {total_ctr} Added To Local Files From {filename}",
                     verified=True,
                 )
 
     # Data access methods ---------------------------------------------------------------------------------------
     def show_files(self):
-        """Method to show file information by partition and if those files are present"""
-        print(f"\nPartition Details\n-----------------")
-        for part in sorted([int(x) for x in self.file_map]):
-            part_str = str(part)
-            partition_name = self.file_map[part_str]["T_root_name"]
-            partition_detail = ", ".join(self.file_map[part_str]["F_roots_names"])
-            filename = self.file_map[part_str]["filename"]
-            if part in self.files:
-                print(
-                    f" Partition {part} [{filename}]: {partition_name} {f'- {partition_detail}' if partition_detail else ''}"
-                )
-                counts = self.files[part].get_counts()
-                print(f"     Consensi: {counts['consensus']}, HMMs: {counts['hmm']}")
-            else:
-                print(
-                    f" Partition {part} [ Absent ]: {partition_name} {f'- {partition_detail}' if partition_detail else ''}"
-                )
-            print()
+        """Shows loaded component files and their counts."""
+        print(f"\nInstalled Components\n--------------------")
+        component_labels = {
+            COMPONENT_CC: "Curated Consensus",
+            COMPONENT_CH: "Curated HMMs",
+            COMPONENT_UC: "Uncurated Consensus",
+            COMPONENT_UH: "Uncurated HMMs",
+        }
+        ct_key = {COMPONENT_CC: "cc", COMPONENT_CH: "ch",
+                  COMPONENT_UC: "uc", COMPONENT_UH: "uh"}
+        for ct in COMPONENT_TYPES:
+            label = component_labels[ct]
+            print(f"\n {label}:")
+            # All partitions expected for this component type, from the file map
+            expected = {
+                int(k.split(".")[1]): v
+                for k, v in self.file_map.items()
+                if k.startswith(ct_key[ct] + ".")
+            }
+            if not expected:
+                print(f"     [ Not Installed ]")
+                continue
+            is_hmm = ct in (COMPONENT_CH, COMPONENT_UH)
+            rows = []
+            for part_num in sorted(expected):
+                fm_entry = expected[part_num]
+                root_name = fm_entry.get("T_root_name", "")
+                leaf = self.components[ct].get(part_num)
+                if leaf is not None:
+                    counts = leaf.get_counts()
+                    count = counts["hmm"] if is_hmm else counts["consensus"]
+                    rows.append((part_num, fm_entry["filename"], root_name, count))
+                else:
+                    rows.append((part_num, fm_entry["filename"], root_name, None))
+            max_prefix = max(len(f"     partition {r[0]} [{r[1]}]:") for r in rows)
+            max_name = max(len(r[2]) for r in rows)
+            present = [r[3] for r in rows if r[3] is not None]
+            max_num = max((len(f"{c:,}") for c in present), default=3)
+            for part_num, filename, root_name, count in rows:
+                prefix = f"     partition {part_num} [{filename}]:"
+                if count is not None:
+                    print(f"{prefix:<{max_prefix}}  {root_name:<{max_name}}  {count:>{max_num},} families")
+                else:
+                    print(f"{prefix:<{max_prefix}}  {root_name:<{max_name}}  --- not present ---")
+        print()
 
     def show_history(self):
         """Iterates over all present files and prints each history"""
         print(f"\nFile History\n-----------------")
-        for file in self.files:
-            print(self.files[file].get_history())
+        for fobj in self.files.values():
+            print(fobj.get_history())
+
+    def print_info(self, history=False):
+        """Print stored metadata, file inventory, and optionally changelog history."""
+        db_info = self.get_metadata()
+        counts = self.get_counts()
+        print()
+        print(
+            f"""\
+FamDB Directory               : {os.path.realpath(self.db_dir)}
+FamDB Creation Format Version : {db_info["famdb_version"]}
+FamDB Creation Date           : {db_info["created"]}
+
+Database : {db_info["name"]}
+Version  : {db_info["db_version"]}
+Date     : {db_info["date"]}
+
+{db_info["description"]}
+
+{counts['file']} Partitions Present
+Total consensus sequences present: {counts["consensus"]}
+Total HMMs present               : {counts["hmm"]}
+"""
+        )
+        self.show_files()
+        if history:
+            self.show_history()
 
     def get_counts(self):
         """Method gets collected counts from each file present"""
         counts = {"consensus": 0, "hmm": 0, "file": 0}
-        for file in self.files:
-            file_counts = self.files[file].get_counts()
+        for fobj in self.files.values():
+            file_counts = fobj.get_counts()
             counts["consensus"] += file_counts["consensus"]
             counts["hmm"] += file_counts["hmm"]
             counts["file"] += 1
@@ -1321,6 +1502,9 @@ class FamDB:
 
         seen = set()
 
+        curated_only = kwargs.get("curated_only", False)
+        uncurated_only = kwargs.get("uncurated_only", False)
+
         def iterate_accs():
             # special case: Searching the whole database in a specific
             # stage only is a common usage pattern in RepeatMasker.
@@ -1347,6 +1531,8 @@ class FamDB:
             # Families/ is faster than repeatedly traversing the tree
             elif tax_id == 1 and descendants:
                 for file in files:
+                    if GROUP_FAMILIES not in files[file].file:
+                        continue
                     names = families_iterator(
                         files[file].file[GROUP_FAMILIES], GROUP_FAMILIES
                     )
@@ -1357,8 +1543,9 @@ class FamDB:
                     tax_id, ancestors=ancestors, descendants=descendants
                 )
                 for node in walk_tree(lineage):
-                    location = self.find_taxon(node)
-                    fams = self.get_families_for_taxon(node, location)
+                    fams = self.get_families_for_taxon(
+                        node, curated_only=curated_only, uncurated_only=uncurated_only
+                    )
                     if fams:
                         yield from fams
 
@@ -1389,16 +1576,17 @@ class FamDB:
 
     def fasta_all(self, group):
         """
-        Method collects all families in a group
-        Used to output all curated data from a db
+        Collects all families in a Families sub-group (e.g. '/DF', '/Aux').
+        Searches curated and uncurated consensus component files only, since
+        consensus sequences are what fasta_all callers need.
         """
         seen = set()
-        for file in self.files:
-            if GROUP_FAMILIES + group in self.files[file].file:
-                for name in families_iterator(
-                    self.files[file].file[GROUP_FAMILIES + group],
-                    GROUP_FAMILIES + group,
-                ):
+        consensus_files = list(self.components[COMPONENT_CC].values()) + \
+                          list(self.components[COMPONENT_UC].values())
+        for leaf in consensus_files:
+            target = GROUP_FAMILIES + group
+            if target in leaf.file:
+                for name in families_iterator(leaf.file[target], target):
                     if name not in seen:
                         seen.add(name)
                         yield self.get_family_by_accession(name)
@@ -1458,30 +1646,66 @@ class FamDB:
         return self.files[0].get_repeatpeps()
 
     # Leaf Wrapper methods ---------------------------------------------------------------------------------------
-    def get_families_for_taxon(
-        self, tax_id, partition, curated_only=False, uncurated_only=False
-    ):
-        """Wrapper method to call the Leaf get_families_for_taxon on a specific file"""
-        if partition in self.files:
-            return self.files[partition].get_families_for_taxon(
-                tax_id, curated_only, uncurated_only
-            )
-        else:
+    def get_families_for_taxon(self, tax_id, curated_only=False, uncurated_only=False):
+        """Returns accessions for all families directly associated with tax_id.
+        Delegates to the root file's Lookup/ByTaxon, which covers all families."""
+        return self.files[0].get_families_for_taxon(tax_id, curated_only, uncurated_only)
+
+    def get_family_by_accession(self, accession, component=None):
+        """Returns the family record for 'accession'.
+
+        If 'component' is specified, only that component's files are searched.
+        Otherwise all loaded files are searched (consensus files first, then hmm).
+        """
+        if component is not None:
+            for leaf in self.components.get(component, {}).values():
+                fam = leaf.get_family_by_accession(accession)
+                if fam:
+                    return fam
             return None
 
-    def get_family_by_accession(self, accession):
-        """Wrapper method to call the Leaf get_family_by_accession"""
-        for file in self.files:
-            fam = self.files[file].get_family_by_accession(accession)
+        # Search consensus components first (full metadata), then hmm
+        search_order = (
+            list(self.components[COMPONENT_CC].values()) +
+            list(self.components[COMPONENT_UC].values()) +
+            list(self.components[COMPONENT_CH].values()) +
+            list(self.components[COMPONENT_UH].values())
+        )
+        for leaf in search_order:
+            fam = leaf.get_family_by_accession(accession)
             if fam:
                 return fam
         return None
 
-    def get_family_by_name(self, accession):
+    def get_family_by_accession_merged(self, accession):
+        """Returns a Family built from consensus metadata merged with pHMM model data.
+
+        Loads the consensus record for full metadata+sequence, then overlays
+        the model field from the corresponding hmm file if available.
+        Falls back to get_family_by_accession() if no consensus file is loaded.
+        """
+        # Try consensus first
+        fam = self.get_family_by_accession(accession, component=COMPONENT_CC) or \
+              self.get_family_by_accession(accession, component=COMPONENT_UC)
+        if fam is None:
+            return self.get_family_by_accession(accession)
+
+        # Overlay model from hmm file if available
+        hmm_fam = self.get_family_by_accession(accession, component=COMPONENT_CH) or \
+                  self.get_family_by_accession(accession, component=COMPONENT_UH)
+        if hmm_fam and hmm_fam.model:
+            fam.model = hmm_fam.model
+            if hmm_fam.taxa_thresholds:
+                fam.taxa_thresholds = hmm_fam.taxa_thresholds
+            if hmm_fam.general_cutoff:
+                fam.general_cutoff = hmm_fam.general_cutoff
+        return fam
+
+    def get_family_by_name(self, name):
         """Wrapper method to call the Leaf get_family_by_name"""
-        for file in self.files:
+        for fobj in self.files.values():
             try:
-                fam = self.files[file].get_family_by_name(accession)
+                fam = fobj.get_family_by_name(name)
                 if fam:
                     return fam
             except Exception:
@@ -1490,15 +1714,15 @@ class FamDB:
 
     def finalize(self):
         """Wrapper method to call the Leaf finalize"""
-        for file in self.files:
-            self.files[file].finalize()
+        for fobj in self.files.values():
+            fobj.finalize()
 
     def filter_stages(self, accession, stages):
         """Wrapper method to call the Leaf filter_stages"""
-        for file in self.files:
-            fam = self.files[file].get_family_by_accession(accession)
+        for fobj in self.files.values():
+            fam = fobj.get_family_by_accession(accession)
             if fam:
-                return self.files[file].filter_stages(accession, stages)
+                return fobj.filter_stages(accession, stages)
 
     def update_description(self, new_desc):
         """Wrapper method to call the Leaf update_description"""
@@ -1506,16 +1730,16 @@ class FamDB:
             self.files[file].update_description(new_desc)
 
     def check_unique(self, family):
-        for file in self.files:
-            if not self.files[file].check_unique(family):
+        for fobj in self.files.values():
+            if not fobj.check_unique(family):
                 return False
         return True
 
     # File Utils
     def close(self):
         """Closes this FamDB instance, making further use invalid."""
-        for file in self.files:
-            self.files[file].close()
+        for fobj in self.files.values():
+            fobj.close()
 
     def __enter__(self):
         return self

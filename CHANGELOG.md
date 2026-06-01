@@ -3,62 +3,96 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## 2.0.5- 2025-08-18
+## 3.0.0 - 2026-05-22
+### Breaking Changes
+- New component-based file format replaces single-dimension partitions. Families
+  are now split across four component types by curation status and model type:
+  `cc` (curated consensus), `ch` (curated HMMs), `uc` (uncurated consensus),
+  and `uh` (uncurated HMMs). Each component is independently partitioned across
+  the taxonomy tree.
+- File naming convention changed to
+  `<base>.<curated|uncurated>.<consensus|hmm>.<N>.h5`. Files from the previous
+  format are not compatible with this release.
+### Added
+- New `check` subcommand reports which component partition files are required
+  for a given species query (including ancestor partitions) and whether each is
+  locally installed or missing.
+- `info` output reformatted with component headings, root taxon name per
+  partition, comma-formatted family counts, and detection of expected but
+  missing partitions.
+- `names` and `lineage` pretty output now includes a partition key header
+  explaining the `cc`/`ch`/`uc`/`uh` component codes.
+- `lineage` pretty header now shows the Dfam release version in the family
+  count description and notes that counts reflect the full release regardless
+  of which partitions are locally installed.
+- `famdb.conf` configuration file added to the installation directory.
+  Setting `FAMDB_DATA_DIR` in this file provides a site-wide default data
+  directory so the `-i` option can be omitted from every `famdb.py` invocation.
+- `utils/download_dfam.py` added: interactive downloader that fetches FamDB
+  component files from the Dfam server, validates MD5 checksums, and
+  decompresses files into the configured data directory.
+- `utils/merge_repbase.py` moved from RepeatMasker to FamDB. Merges RepBase
+  RepeatMasker Edition (RMRB) EMBL families into locally-installed CC partition
+  files with state tracking and idempotent re-run support.
+- `export_dfam.py` and `partition_dfam.py` moved to the `utils/` directory
+  alongside other admin tools.
+- Admin utilities (`export_dfam.py`, `partition_dfam.py`) no longer embed
+  hardcoded paths to internal Dfam libraries. Admins configure access via
+  `PYTHONPATH`; a clear error message is shown if the dependencies are absent.
+- `utils/set_ver_date.py` added for patching version and date metadata in
+  existing FamDB files without re-running an export.
+- README.md rewritten with current format description, installation
+  instructions, and full command reference.
+### Removed
+- `hmm_species` format removed from the `family` subcommand (no species
+  context is available in a single-family lookup).
+- `utils/file_checker.py` removed (superseded by the `check` subcommand and
+  improved format validation in the core classes).
+### Known Issues
+- The `append` command uses a global uniqueness check (across all loaded
+  partition files) to skip entries already present in the database. This means
+  that if a user runs `append` with only a subset of partitions present, any
+  EMBL family whose taxonomic clades span multiple partitions will be written
+  only to the partitions available at the time of the first run. On a
+  subsequent `append` run with additional partitions present, the global check
+  will find the family in the already-written partition and skip it entirely,
+  leaving it absent from the newly added partition. Currently this is not an
+  issue because all curated consensus families fit within a single CC
+  partition, but will need to be fixed before the CC component spans more than
+  one partition. The fix requires moving the uniqueness check inside the
+  per-partition routing loop so that each leaf is checked independently.
+
+## 2.0.5 - 2025-08-18
 - Cleaner logging during append
 
-## 2.0.4- 2025-06-30
+## 2.0.4 - 2025-06-30
 ### Added
 - Added the `--stage 0` option to filter for families with no stage defined
 
-## 2.0.3- 2025-06-27
+## 2.0.3 - 2025-06-27
 ### Fixed
 - Fixed a bug where the lineage total format would skip taxa on partition boundaries
 
-## 2.0.2- 2025-06-03
+## 2.0.2 - 2025-06-03
 ### Fixed
 - Fixed a bug where lookup keys might not have been created in a specific file, causing a query to break if that file was included in the search
 ### Added
 - Added a file holding names of RepBase families to exclude from the append command. This prevents duplicate families from being added.
 
-## 2.0.1- 2025-03-12
-- Updated The logging during the append command, both the output and interal file log
+## 2.0.1 - 2025-03-12
+- Updated the logging during the append command, both the output and internal file log
 
 ## 2.0.0 - 2025-03-11
 ### Added
 - The taxonomy now includes links between nodes connecting only nodes with associated family data. By default, traversing the taxonomy tree will skip empty nodes except in specific instances like semicolon-delineated lineage output. Standard parent-child traversal is still available.
-- Each file now tracks it's change history. This history is accessible via the `info --history` command.
+- Each file now tracks its change history. This history is accessible via the `info --history` command.
 - The file history also tracks any interrupted changes. Files with recorded interruptions will be considered corrupt and won't be accessible. Please back up files before appending any data.
-- RepeatPeps file added to FamDB Root file, along with a command to access it. This is for better future integration with RepeatMasker/RepeatModeler.
+- RepeatPeps file added to FamDB root file, along with a command to access it. This is for better future integration with RepeatMasker/RepeatModeler.
 - A new command to edit the description of an export was added.
-- The README.md file no longer contains usage information. There is now a `./usage` directory containing a file for each command with examples and additional detail.
 ### Changed
-- The taxonomy system is simplified and moved entirely to the FamDB Root file. The Lineage class has been removed.
+- The taxonomy system is simplified and moved entirely to the FamDB root file. The Lineage class has been removed.
 - Leaf files no longer store taxonomy data. They have a Lookup/ByTaxon field instead.
-- Many Metadata variable keys were changed to gobal variables to enable standardization across scripts
-- Read_embl_families was moved from a static method on Family to a static method on FamDB. This simplifies some import trees.
-- Various bug fixes involving filters and file coordination.
-
-## 2.0.2- 2025-05-27
-### Fixed
-- Fixed a bug where lookup keys might not have been created in a specific file, causing a query to break if that file was included in the search
-### Added
-- Added a file holding names of RepBase families to exclude from the append command. This prevents duplicate families from being added.
-
-## 2.0.1- 2025-03-12
-- Updated The logging during the append command, both the output and interal file log
-
-## 2.0.0 - 2025-03-11
-### Added
-- The taxonomy now includes links between nodes connecting only nodes with associated family data. By default, traversing the taxonomy tree will skip empty nodes except in specific instances like semicolon-delineated lineage output. Standard parent-child traversal is still available.
-- Each file now tracks it's change history. This history is accessible via the `info --history` command.
-- The file history also tracks any interrupted changes. Files with recorded interruptions will be considered corrupt and won't be accessible. Please back up files before appending any data.
-- RepeatPeps file added to FamDB Root file, along with a command to access it. This is for better future integration with RepeatMasker/RepeatModeler.
-- A new command to edit the description of an export was added.
-- The README.md file no longer contains usage information. There is now a `./usage` directory containing a file for each command with examples and additional detail.
-### Changed
-- The taxonomy system is simplified and moved entirely to the FamDB Root file. The Lineage class has been removed.
-- Leaf files no longer store taxonomy data. They have a Lookup/ByTaxon field instead.
-- Many Metadata variable keys were changed to gobal variables to enable standardization across scripts
+- Many metadata variable keys were changed to global variables to enable standardization across scripts.
 - Read_embl_families was moved from a static method on Family to a static method on FamDB. This simplifies some import trees.
 - Various bug fixes involving filters and file coordination.
 
